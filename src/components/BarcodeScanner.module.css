@@ -1,0 +1,156 @@
+.wrapper {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  overflow: hidden;
+  margin-bottom: 24px;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+.label {
+  font-family: "Syne", sans-serif;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1.2px;
+  color: var(--text-muted);
+}
+
+.toggleBtn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 14px;
+  background: transparent;
+  border: 1.5px solid var(--border);
+  color: var(--text-muted);
+  border-radius: 8px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  transition: all 0.18s;
+}
+.toggleBtn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.toggleBtn.active {
+  background: var(--danger-dim);
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.body {
+  padding: 16px 18px;
+}
+
+.viewfinder {
+  border-radius: 10px;
+  overflow: hidden;
+  background: #000;
+}
+
+/* Override html5-qrcode inline styles */
+.reader {
+  width: 100% !important;
+}
+
+.placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 32px 16px;
+  color: var(--text-dim);
+  text-align: center;
+}
+.placeholder p {
+  font-size: 0.85rem;
+  line-height: 1.6;
+  color: var(--text-muted);
+}
+.placeholder strong {
+  color: var(--text);
+}
+
+.scanResult {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 11px 14px;
+  border-radius: 10px;
+  border: 1px solid;
+  animation: slideUp 0.25s ease;
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.found {
+  background: var(--accent-dim);
+  border-color: rgba(163, 230, 53, 0.3);
+}
+.notFound {
+  background: var(--danger-dim);
+  border-color: rgba(248, 113, 113, 0.3);
+}
+
+.scanResultLeft {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.scanResultLabel {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+}
+.scanResultCode {
+  font-family: "Syne", monospace;
+  font-size: 0.88rem;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.found .scanResultCode {
+  color: var(--accent);
+}
+.notFound .scanResultCode {
+  color: var(--danger);
+}
+
+.scanResultBadge {
+  font-size: 0.75rem;
+  font-weight: 700;
+  padding: 3px 10px;
+  border-radius: 6px;
+  flex-shrink: 0;
+}
+.found .scanResultBadge {
+  background: rgba(163, 230, 53, 0.15);
+  color: var(--accent);
+}
+.notFound .scanResultBadge {
+  background: rgba(248, 113, 113, 0.15);
+  color: var(--danger);
+}
