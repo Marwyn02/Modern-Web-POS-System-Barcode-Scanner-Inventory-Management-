@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-unused-vars */
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -32,7 +31,6 @@ import {
   ResponsiveContainer,
   Legend,
   Cell,
-  LineChart,
   Line,
   PieChart,
   Pie,
@@ -474,8 +472,8 @@ export default function Reports() {
                     <YAxis tick={axisStyle} tickFormatter={(v) => `₱${v}`} />
                     <Tooltip
                       {...tooltipStyle}
-                      formatter={(value: number, name: string) => [
-                        formatPeso(value),
+                      formatter={(value, name) => [
+                        formatPeso(Number(value)),
                         name === "regular"
                           ? "Regular Sales"
                           : name === "discounted"
@@ -597,8 +595,8 @@ export default function Reports() {
                       />
                       <Tooltip
                         {...tooltipStyle}
-                        formatter={(value: number) => [
-                          formatPeso(value),
+                        formatter={(value) => [
+                          formatPeso(Number(value)),
                           "Revenue",
                         ]}
                       />
@@ -641,8 +639,10 @@ export default function Reports() {
                       <YAxis tick={axisStyle} tickFormatter={(v) => `₱${v}`} />
                       <Tooltip
                         {...tooltipStyle}
-                        formatter={(value: number, name: string) => [
-                          name === "revenue" ? formatPeso(value) : value,
+                        formatter={(value, name) => [
+                          name === "revenue"
+                            ? formatPeso(Number(value))
+                            : value,
                           name === "revenue" ? "Revenue" : "Transactions",
                         ]}
                       />
@@ -714,7 +714,7 @@ export default function Reports() {
                       />
                       <Tooltip
                         {...tooltipStyle}
-                        formatter={(v: number, n: string) => [`${v}%`, n]}
+                        formatter={(v, n) => [`${Number(v)}%`, n as string]}
                       />
                     </RadarChart>
                   </ResponsiveContainer>
@@ -817,10 +817,10 @@ export default function Reports() {
                         />
                         <Tooltip
                           {...tooltipStyle}
-                          formatter={(value: number, name: string) => [
+                          formatter={(value, name) => [
                             name === "stockValue"
-                              ? formatPeso(value)
-                              : `${value} units`,
+                              ? formatPeso(Number(value))
+                              : `${Number(value)} units`,
                             name === "stockValue"
                               ? "Stock Value (₱)"
                               : "30-day Sales",
@@ -977,7 +977,7 @@ export default function Reports() {
                           outerRadius={100}
                           paddingAngle={3}
                           dataKey="value"
-                          label={({ name, percent }: any) =>
+                          label={({ percent }: any) =>
                             percent > 0.05
                               ? `${(percent * 100).toFixed(0)}%`
                               : ""
@@ -990,9 +990,9 @@ export default function Reports() {
                         </Pie>
                         <Tooltip
                           {...tooltipStyle}
-                          formatter={(value: number, name: string) => [
-                            formatPeso(value),
-                            name,
+                          formatter={(value, name) => [
+                            formatPeso(Number(value)),
+                            name as string,
                           ]}
                         />
                         <Legend
@@ -1023,8 +1023,8 @@ export default function Reports() {
                       <YAxis tick={axisStyle} tickFormatter={(v) => `₱${v}`} />
                       <Tooltip
                         {...tooltipStyle}
-                        formatter={(value: number) => [
-                          formatPeso(value),
+                        formatter={(value) => [
+                          formatPeso(Number(value)),
                           "Refunds",
                         ]}
                       />
