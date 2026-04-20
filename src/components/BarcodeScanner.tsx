@@ -271,15 +271,7 @@ interface LastScan {
 
 const FORMATS = [
   Html5QrcodeSupportedFormats.EAN_13,
-  Html5QrcodeSupportedFormats.EAN_8,
-  Html5QrcodeSupportedFormats.UPC_A,
-  Html5QrcodeSupportedFormats.UPC_E,
   Html5QrcodeSupportedFormats.CODE_128,
-  Html5QrcodeSupportedFormats.CODE_39,
-  Html5QrcodeSupportedFormats.CODE_93,
-  Html5QrcodeSupportedFormats.QR_CODE,
-  Html5QrcodeSupportedFormats.ITF,
-  Html5QrcodeSupportedFormats.CODABAR,
 ];
 
 function detectMobile(): boolean {
@@ -357,9 +349,31 @@ export default function BarcodeScanner({ onScan }: BarcodeScannerProps) {
         await scanner.start(
           cameraConstraint,
           {
-            fps: 10,
-            qrbox: { width: 250, height: 110 },
-            aspectRatio: 1.5,
+            fps: 25, // high fps = more decode attempts per second
+            qrbox: (viewfinderWidth) => {
+              // EAN-13 barcodes are wide and short (roughly 3.7:1 ratio).
+              // We use 85% of the viewfinder width so the barcode always fits
+              // even when held slightly off-center. Height kept short on purpose —
+              // a tight box forces the decoder to focus on just the barcode region
+              // which is significantly faster than scanning the whole frame.
+              const width = Math.max(Math.floor(viewfinderWidth * 0.85), 200);
+              const height = Math.max(Math.floor(width / 3.7), 80); // maintain EAN-13 aspect ratio
+              return { width, height };
+            },
+            aspectRatio: 1.777, // 16:9 — wider frame captures more of the barcode
+            disableFlip: false,
+            videoConstraints: {
+              // Request the highest resolution the camera supports.
+              // More pixels = easier to decode small/dense barcodes.
+              width: { ideal: 1920 },
+              height: { ideal: 1080 },
+              // On mobile, lock to rear cam with autofocus so the
+              // camera continuously sharpens on close objects.
+              ...(isMobileRef.current && {
+                facingMode: { exact: facing },
+                focusMode: "continuous", // keeps small barcodes sharp
+              }),
+            },
           },
           handleDecode,
           () => {},
@@ -503,6 +517,24 @@ export default function BarcodeScanner({ onScan }: BarcodeScannerProps) {
       {domReady && (
         <div className="rounded-md overflow-hidden bg-black w-full">
           <div id="qr-reader" className="w-full" />
+        </div>
+      )}
+
+      {/* ── Scanning tip (shown while active) ── */}
+      {active && (
+        <div className="grid grid-cols-3 gap-1.5 text-center">
+          {[
+            { icon: "📏", tip: "10–20cm away" },
+            { icon: "💡", tip: "Good lighting" },
+            { icon: "🔲", tip: "Barcode flat in box" },
+          ].map(({ icon, tip }) => (
+            <div key={tip} className="rounded-md bg-muted/40 px-2 py-1.5">
+              <span className="text-base">{icon}</span>
+              <p className="text-[10px] text-muted-foreground mt-0.5 leading-tight">
+                {tip}
+              </p>
+            </div>
+          ))}
         </div>
       )}
 
