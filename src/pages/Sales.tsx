@@ -1,6 +1,6 @@
 /* eslint-disable react-hooks/exhaustive-deps */
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -15,14 +15,10 @@ import {
 } from "@/components/ui/select";
 import {
   Search,
-  Plus,
-  Minus,
-  Trash2,
-  CreditCard,
-  Banknote,
   Printer,
-  Calculator,
-  UserCheck,
+  ChevronLeft,
+  ChevronRight,
+  Download,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -35,6 +31,8 @@ import { Badge } from "@/components/ui/badge";
 import { type Tables } from "@/integrations/supabase/types";
 import { differenceInDays } from "date-fns";
 import BarcodeScanner from "@/components/BarcodeScanner";
+import CartBody from "@/components/sales/CartBody";
+import { format } from "date-fns";
 
 type Product = Tables<"products">;
 
@@ -43,9 +41,10 @@ interface CartItem {
   quantity: number;
 }
 
-const QUICK_CASH = [1000, 500, 200, 100, 50, 20, 10, 5, 1];
+const ITEMS_PER_PAGE = 24;
 
 type DiscountType = "none" | "pwd" | "senior";
+type FlashState = { id: string; type: "success" | "error" } | null;
 
 export default function Sales() {
   const [search, setSearch] = useState("");
@@ -57,8 +56,15 @@ export default function Sales() {
   const [discountType, setDiscountType] = useState<DiscountType>("none");
   const [customerIdNumber, setCustomerIdNumber] = useState("");
   const [lastTransaction, setLastTransaction] = useState<any>(null);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [flashState, setFlashState] = useState<FlashState>(null);
+
   const queryClient = useQueryClient();
   const receiptRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [search, categoryFilter]);
 
   const { data: categories } = useQuery({
     queryKey: ["sales-categories"],
@@ -80,17 +86,22 @@ export default function Sales() {
         .eq("is_active", true)
         .gt("stock_quantity", 0)
         .order("name");
-      if (search) {
+      if (search)
         query = query.or(
           `name.ilike.%${search}%,barcode.ilike.%${search}%,sku.ilike.%${search}%`,
         );
-      }
       if (categoryFilter !== "all")
         query = query.eq("category_id", categoryFilter);
-      const { data } = await query.limit(30);
+      const { data } = await query;
       return data || [];
     },
   });
+
+  const totalPages = Math.ceil((products?.length || 0) / ITEMS_PER_PAGE);
+  const paginatedProducts = (products || []).slice(
+    (currentPage - 1) * ITEMS_PER_PAGE,
+    currentPage * ITEMS_PER_PAGE,
+  );
 
   const getExpiryStatus = (product: Product) => {
     if (!product.expiry_date) return "none";
@@ -127,28 +138,51 @@ export default function Sales() {
     return null;
   };
 
-  const addToCart = (product: Product) => {
-    const expiry = getExpiryStatus(product);
-    if (expiry === "expired") {
-      toast.error("This product is expired and cannot be sold");
-      return;
-    }
-    setCart((prev) => {
-      const existing = prev.find((item) => item.product.id === product.id);
-      if (existing) {
-        if (existing.quantity >= product.stock_quantity) {
-          toast.error("Not enough stock");
-          return prev;
-        }
-        return prev.map((item) =>
-          item.product.id === product.id
-            ? { ...item, quantity: item.quantity + 1 }
-            : item,
-        );
-      }
-      return [...prev, { product, quantity: 1 }];
-    });
+  const flashCard = (productId: string, type: "success" | "error") => {
+    setFlashState({ id: productId, type });
+    setTimeout(() => setFlashState(null), 600);
   };
+
+  const addToCart = useCallback(
+    (product: Product, fromBarcode = false) => {
+      const expiry = getExpiryStatus(product);
+      if (expiry === "expired") {
+        flashCard(product.id, "error");
+        if (!fromBarcode)
+          toast.error("This product is expired and cannot be sold");
+        return false;
+      }
+      let success = true;
+      setCart((prev) => {
+        const existing = prev.find((item) => item.product.id === product.id);
+        if (existing) {
+          if (existing.quantity >= product.stock_quantity) {
+            if (!fromBarcode) toast.error("Not enough stock");
+            success = false;
+            return prev;
+          }
+          return prev.map((item) =>
+            item.product.id === product.id
+              ? { ...item, quantity: item.quantity + 1 }
+              : item,
+          );
+        }
+        return [...prev, { product, quantity: 1 }];
+      });
+      flashCard(product.id, success ? "success" : "error");
+      return success;
+    },
+    [products],
+  );
+
+  const handleBarcodeScan = useCallback(
+    (barcode: string): boolean => {
+      const product = products?.find((p) => p.barcode === barcode);
+      if (!product) return false;
+      return addToCart(product, true);
+    },
+    [products, addToCart],
+  );
 
   const updateQuantity = (productId: string, delta: number) => {
     setCart((prev) =>
@@ -170,7 +204,6 @@ export default function Sales() {
     setCart((prev) => prev.filter((item) => item.product.id !== productId));
   };
 
-  // Price calculations with discount
   const cartSubtotal = cart.reduce((sum, item) => {
     const price = Number(item.product.price);
     const nearExpiryDiscount = Number(item.product.discount_percentage) || 0;
@@ -179,50 +212,51 @@ export default function Sales() {
     return sum + effectivePrice * item.quantity;
   }, 0);
 
-  const handleBarcodeScan = useCallback(
-    (barcode: string): boolean => {
-      // Look up the barcode against the already-fetched products list
-      const product = products?.find((p) => p.barcode === barcode);
-
-      if (!product) return false; // tells BarcodeScanner to show "Not Found"
-
-      addToCart(product); // reuses your existing cart logic (stock check, expiry check, etc.)
-      return true; // tells BarcodeScanner to show "Added to Cart"
-    },
-    [products, addToCart],
-  );
-
   const isDiscounted = discountType !== "none";
-  // PWD/Senior: VAT-exempt + 20% discount on original price
-  // Step 1: Remove VAT (price / 1.12), Step 2: Apply 20% discount
   const vatExemptSubtotal = cartSubtotal / 1.12;
   const pwdSeniorDiscount = vatExemptSubtotal * 0.2;
   const discountedTotal = vatExemptSubtotal - pwdSeniorDiscount;
-
   const cartTotal = isDiscounted ? discountedTotal : cartSubtotal;
   const vatAmount = isDiscounted ? 0 : (cartSubtotal * 12) / 112;
   const netAmount = isDiscounted ? discountedTotal : cartSubtotal - vatAmount;
   const discountAmount = isDiscounted ? cartSubtotal - discountedTotal : 0;
   const changeAmount = cashTendered - cartTotal;
 
+  const { data: currentEmployee } = useQuery({
+    queryKey: ["current-employee"],
+    queryFn: async () => {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user) return null;
+      const { data } = await supabase
+        .from("employees")
+        .select("name")
+        .eq("user_id", user.id)
+        .single();
+      return data;
+    },
+  });
+
   const checkoutMutation = useMutation({
     mutationFn: async (paymentMethod: "cash" | "card") => {
-      if (isDiscounted && !customerIdNumber.trim()) {
+      if (isDiscounted && !customerIdNumber.trim())
         throw new Error(
           "Please enter the customer's PWD/Senior Citizen ID number",
         );
-      }
-
       const cashTenderedValue =
         paymentMethod === "cash" ? parseFloat(cashTendered.toFixed(2)) : 0;
       const changeValue =
         paymentMethod === "cash"
           ? parseFloat((cashTendered - cartTotal).toFixed(2))
           : 0;
-
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
       const { data: transaction, error: txError } = await supabase
         .from("transactions")
         .insert({
+          employee_id: user.id,
           total_amount: parseFloat(cartTotal.toFixed(2)),
           payment_method: paymentMethod,
           vat_amount: parseFloat(vatAmount.toFixed(2)),
@@ -235,34 +269,31 @@ export default function Sales() {
         })
         .select()
         .single();
-
       if (txError) throw txError;
-
-      const items = cart.map((item) => ({
-        transaction_id: transaction.id,
-        product_id: item.product.id,
-        quantity: item.quantity,
-        unit_price: Number(item.product.price),
-        subtotal: Number(item.product.price) * item.quantity,
-      }));
-
       const { error: itemsError } = await supabase
         .from("transaction_items")
-        .insert(items);
+        .insert(
+          cart.map((item) => ({
+            transaction_id: transaction.id,
+            product_id: item.product.id,
+            quantity: item.quantity,
+            unit_price: Number(item.product.price),
+            subtotal: Number(item.product.price) * item.quantity,
+          })),
+        );
       if (itemsError) throw itemsError;
-
       for (const item of cart) {
-        const { error: stockError } = await supabase
+        const { error } = await supabase
           .from("products")
           .update({
             stock_quantity: item.product.stock_quantity - item.quantity,
           })
           .eq("id", item.product.id);
-        if (stockError) throw stockError;
+        if (error) throw error;
       }
-
       return {
         id: transaction.id,
+        created_at: transaction.created_at,
         total: cartTotal,
         vat: vatAmount,
         net: netAmount,
@@ -279,6 +310,7 @@ export default function Sales() {
         items: [...cart],
         cashTendered: data.method === "cash" ? cashTendered : undefined,
         change: data.method === "cash" ? cashTendered - data.total : undefined,
+        cashierName: currentEmployee?.name,
       });
       setShowReceipt(true);
       setCart([]);
@@ -290,9 +322,7 @@ export default function Sales() {
       queryClient.invalidateQueries({ queryKey: ["dashboard"] });
       toast.success("Transaction completed!");
     },
-    onError: (error: any) => {
-      toast.error(error.message);
-    },
+    onError: (error: any) => toast.error(error.message),
   });
 
   const handleCashCheckout = () => {
@@ -304,396 +334,371 @@ export default function Sales() {
   };
 
   const handlePrint = () => {
-    if (receiptRef.current) {
-      const printWindow = window.open("", "_blank");
-      if (printWindow) {
-        printWindow.document.write(`
-          <html><head><title>Receipt</title>
-          <style>body{font-family:monospace;max-width:300px;margin:0 auto;padding:20px;font-size:12px}
-          h2{text-align:center;margin:0}p{margin:4px 0}.line{border-top:1px dashed #000;margin:8px 0}
-          .item{display:flex;justify-content:space-between}.total{font-weight:bold;font-size:14px}</style>
-          </head><body>${receiptRef.current.innerHTML}</body></html>
-        `);
-        printWindow.document.close();
-        printWindow.print();
-      }
-    }
+    if (!receiptRef.current) return;
+    const w = window.open("", "_blank");
+    if (!w) return;
+    w.document.write(`<html><head><title>Receipt</title>
+      <style>body{font-family:monospace;max-width:300px;margin:0 auto;padding:20px;font-size:12px}
+      h2{text-align:center;margin:0}p{margin:4px 0}.line{border-top:1px dashed #000;margin:8px 0}
+      .item{display:flex;justify-content:space-between}.total{font-weight:bold;font-size:14px}</style>
+      </head><body>${receiptRef.current.innerHTML}</body></html>`);
+    w.document.close();
+    w.print();
   };
 
-  return (
-    <div className="space-y-6">
-      <h1 className="text-2xl font-semibold tracking-tight">Sales</h1>
+  const handleDownloadReceipt = () => {
+    if (!receiptRef.current) return;
+    const content = receiptRef.current.innerHTML;
+    const blob = new Blob(
+      [
+        `<html><head><style>
+    body{font-family:monospace;max-width:300px;margin:0 auto;padding:20px;font-size:12px}
+    h2{text-align:center;margin:0}p{margin:4px 0}.line{border-top:1px dashed #000;margin:8px 0}
+    .item{display:flex;justify-content:space-between}.total{font-weight:bold;font-size:14px}
+  </style></head><body>${content}</body></html>`,
+      ],
+      { type: "text/html" },
+    );
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `receipt-${lastTransaction?.id?.slice(0, 8) || "tx"}.html`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
-      <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
-        {/* Product Search */}
-        <div className="lg:col-span-3 space-y-4">
-          <BarcodeScanner onScan={handleBarcodeScan} />{" "}
-          <div className="flex gap-3">
-            <div className="relative flex-1">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input
-                placeholder="Search by name, barcode, or SKU..."
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                className="pl-10"
-              />
-            </div>
-            <Select value={categoryFilter} onValueChange={setCategoryFilter}>
-              <SelectTrigger className="w-44">
-                <SelectValue placeholder="All Categories" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Categories</SelectItem>
-                {categories?.map((c) => (
-                  <SelectItem key={c.id} value={c.id}>
-                    {c.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-            {products?.map((product) => {
-              const expiry = getExpiryStatus(product);
-              const isExpired = expiry === "expired";
-              const nearExpiryDisc = Number(product.discount_percentage) || 0;
-              return (
-                <button
-                  key={product.id}
-                  onClick={() => addToCart(product)}
-                  disabled={isExpired}
-                  className={`p-4 rounded-lg border text-left transition-all ${isExpired ? "opacity-50 cursor-not-allowed bg-muted" : "bg-card hover:border-primary/50 hover:shadow-sm"}`}
-                >
-                  <div className="flex items-start justify-between gap-1">
-                    <p className="font-medium text-sm truncate flex-1">
-                      {product.name}
-                    </p>
-                    {getExpiryBadge(product)}
-                  </div>
-                  <div className="flex items-baseline gap-2 mt-1">
-                    <p className="text-lg font-semibold text-success">
-                      ₱
-                      {nearExpiryDisc > 0
-                        ? (
-                            Number(product.price) *
-                            (1 - nearExpiryDisc / 100)
-                          ).toFixed(2)
-                        : Number(product.price).toFixed(2)}
-                    </p>
-                    {nearExpiryDisc > 0 && (
-                      <p className="text-xs text-muted-foreground line-through">
-                        ₱{Number(product.price).toFixed(2)}
-                      </p>
-                    )}
-                  </div>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    {product.stock_quantity} in stock
-                    {nearExpiryDisc > 0 && (
-                      <span className="text-warning ml-1">
-                        • {nearExpiryDisc}% off
-                      </span>
-                    )}
-                  </p>
-                </button>
-              );
-            })}
-            {products?.length === 0 && (
-              <p className="col-span-full text-center text-muted-foreground py-8">
-                No products found
+  // ── Product grid (shared, slightly different sizing per breakpoint) ─────────
+  const ProductGrid = ({ compact = false }: { compact?: boolean }) => (
+    <div
+      className={`grid gap-2 ${compact ? "grid-cols-2" : "grid-cols-2 md:grid-cols-3"}`}
+    >
+      {paginatedProducts.map((product) => {
+        const expiry = getExpiryStatus(product);
+        const isExpired = expiry === "expired";
+        const nearExpiryDisc = Number(product.discount_percentage) || 0;
+        const isFlashing = flashState?.id === product.id;
+        return (
+          <button
+            key={product.id}
+            onClick={() => !isExpired && addToCart(product)}
+            disabled={isExpired}
+            className={[
+              "rounded-lg border text-left transition-colors select-none",
+              compact ? "p-3" : "p-4",
+              isExpired
+                ? "opacity-50 cursor-not-allowed bg-muted"
+                : "bg-card hover:border-primary/50 hover:shadow-sm active:scale-95",
+              isFlashing && flashState?.type === "success"
+                ? "flash-success"
+                : "",
+              isFlashing && flashState?.type === "error" ? "flash-error" : "",
+            ].join(" ")}
+            style={{ transition: "transform 0.1s" }}
+          >
+            <div className="flex items-start justify-between gap-1">
+              <p
+                className={`font-medium truncate flex-1 ${compact ? "text-xs" : "text-sm"}`}
+              >
+                {product.name}
               </p>
-            )}
+              {getExpiryBadge(product)}
+            </div>
+            <div className="flex items-baseline gap-2 mt-1">
+              <p
+                className={`font-semibold text-success ${compact ? "text-sm" : "text-lg"}`}
+              >
+                ₱
+                {nearExpiryDisc > 0
+                  ? (
+                      Number(product.price) *
+                      (1 - nearExpiryDisc / 100)
+                    ).toFixed(2)
+                  : Number(product.price).toFixed(2)}
+              </p>
+              {nearExpiryDisc > 0 && (
+                <p className="text-xs text-muted-foreground line-through">
+                  ₱{Number(product.price).toFixed(2)}
+                </p>
+              )}
+            </div>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              {product.stock_quantity} in stock
+              {nearExpiryDisc > 0 && (
+                <span className="text-warning ml-1">
+                  • {nearExpiryDisc}% off
+                </span>
+              )}
+            </p>
+          </button>
+        );
+      })}
+      {paginatedProducts.length === 0 && (
+        <p
+          className={`col-span-full text-center text-muted-foreground py-8 text-sm`}
+        >
+          No products found
+        </p>
+      )}
+    </div>
+  );
+
+  // ── Pagination bar ──────────────────────────────────────────────────────────
+  const PaginationBar = ({ compact = false }: { compact?: boolean }) => {
+    if (totalPages <= 1) return null;
+    return (
+      <div className="flex items-center justify-between pt-1">
+        <p
+          className={`text-muted-foreground ${compact ? "text-xs" : "text-sm"}`}
+        >
+          {(currentPage - 1) * ITEMS_PER_PAGE + 1}–
+          {Math.min(currentPage * ITEMS_PER_PAGE, products?.length || 0)} of{" "}
+          {products?.length}
+        </p>
+        <div className="flex items-center gap-1">
+          <Button
+            variant="outline"
+            size="icon"
+            className={compact ? "h-7 w-7" : "h-8 w-8"}
+            onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+            disabled={currentPage === 1}
+          >
+            <ChevronLeft className={compact ? "h-3 w-3" : "h-4 w-4"} />
+          </Button>
+          {compact ? (
+            <span className="text-xs text-muted-foreground px-2">
+              {currentPage} / {totalPages}
+            </span>
+          ) : (
+            Array.from({ length: totalPages }, (_, i) => i + 1)
+              .filter(
+                (p) =>
+                  p === 1 || p === totalPages || Math.abs(p - currentPage) <= 1,
+              )
+              .reduce<(number | "...")[]>((acc, p, idx, arr) => {
+                if (idx > 0 && (p as number) - (arr[idx - 1] as number) > 1)
+                  acc.push("...");
+                acc.push(p);
+                return acc;
+              }, [])
+              .map((p, i) =>
+                p === "..." ? (
+                  <span
+                    key={`e-${i}`}
+                    className="px-1 text-sm text-muted-foreground"
+                  >
+                    …
+                  </span>
+                ) : (
+                  <Button
+                    key={p}
+                    variant={currentPage === p ? "default" : "outline"}
+                    size="icon"
+                    className="h-8 w-8 text-xs"
+                    onClick={() => setCurrentPage(p as number)}
+                  >
+                    {p}
+                  </Button>
+                ),
+              )
+          )}
+          <Button
+            variant="outline"
+            size="icon"
+            className={compact ? "h-7 w-7" : "h-8 w-8"}
+            onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+            disabled={currentPage === totalPages}
+          >
+            <ChevronRight className={compact ? "h-3 w-3" : "h-4 w-4"} />
+          </Button>
+        </div>
+      </div>
+    );
+  };
+  return (
+    <>
+      <style>{`
+        @keyframes flash-success {
+          0%   { box-shadow: 0 0 0 0 rgba(34,197,94,0.7); background-color: rgba(34,197,94,0.12); }
+          50%  { box-shadow: 0 0 0 6px rgba(34,197,94,0); background-color: rgba(34,197,94,0.22); }
+          100% { box-shadow: 0 0 0 0 rgba(34,197,94,0);   background-color: transparent; }
+        }
+        @keyframes flash-error {
+          0%   { box-shadow: 0 0 0 0 rgba(239,68,68,0.7); background-color: rgba(239,68,68,0.12); }
+          50%  { box-shadow: 0 0 0 6px rgba(239,68,68,0); background-color: rgba(239,68,68,0.22); }
+          100% { box-shadow: 0 0 0 0 rgba(239,68,68,0);   background-color: transparent; }
+        }
+        .flash-success { animation: flash-success 0.6s ease-out forwards; }
+        .flash-error   { animation: flash-error   0.6s ease-out forwards; }
+      `}</style>
+
+      <div className="space-y-4">
+        <h1 className="text-2xl font-semibold tracking-tight">Sales</h1>
+
+        {/* ══════════════════════════════════════════════════
+            MOBILE layout  (hidden on lg+)
+            Order: 1) Barcode  2) Cart block  3) Products
+            ══════════════════════════════════════════════════ */}
+        <div className="flex flex-col gap-4 lg:hidden">
+          {/* 1 — Barcode scanner */}
+          <BarcodeScanner onScan={handleBarcodeScan} />
+
+          {/* 2 — Cart (inline block, self-contained scroll) */}
+          <Card>
+            <CardHeader className="pb-2 pt-4">
+              <CardTitle className="text-base flex items-center justify-between">
+                <span>
+                  Cart ({cart.reduce((s, i) => s + i.quantity, 0)} items)
+                </span>
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="pt-0 pb-4">
+              <CartBody
+                cart={cart}
+                discountType={discountType}
+                customerIdNumber={customerIdNumber}
+                setCustomerIdNumber={setCustomerIdNumber}
+                setDiscountType={setDiscountType}
+                showCalc={showCalc}
+                setShowCalc={setShowCalc}
+                cashTendered={cashTendered}
+                setCashTendered={setCashTendered}
+                cartSubtotal={cartSubtotal}
+                vatExemptSubtotal={vatExemptSubtotal}
+                pwdSeniorDiscount={pwdSeniorDiscount}
+                cartTotal={cartTotal}
+                vatAmount={vatAmount}
+                netAmount={netAmount}
+                discountAmount={discountAmount}
+                changeAmount={changeAmount}
+                checkoutMutation={checkoutMutation}
+                updateQuantity={updateQuantity}
+                removeFromCart={removeFromCart}
+                handleCashCheckout={handleCashCheckout}
+              />
+            </CardContent>
+          </Card>
+
+          {/* 3 — Product search + grid */}
+          <div className="space-y-3">
+            <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">
+              Products — tap to add
+            </p>
+            <div className="flex gap-2">
+              <div className="relative flex-1">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input
+                  placeholder="Search by name, barcode, or SKU..."
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  className="pl-10"
+                />
+              </div>
+              <Select value={categoryFilter} onValueChange={setCategoryFilter}>
+                <SelectTrigger className="w-32">
+                  <SelectValue placeholder="All" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All</SelectItem>
+                  {categories?.map((c) => (
+                    <SelectItem key={c.id} value={c.id}>
+                      {c.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <ProductGrid compact />
+            <PaginationBar compact />
           </div>
         </div>
 
-        {/* Cart */}
-        <div className="lg:col-span-2">
-          <Card className="sticky top-6">
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base">
-                Cart ({cart.length} items)
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {cart.length === 0 ? (
-                <p className="text-sm text-muted-foreground text-center py-8">
-                  Cart is empty
-                </p>
-              ) : (
-                <>
-                  <div className="space-y-3 max-h-[25vh] overflow-auto">
-                    {cart.map((item) => {
-                      const nearExpiryDisc =
-                        Number(item.product.discount_percentage) || 0;
-                      const effectivePrice =
-                        nearExpiryDisc > 0
-                          ? Number(item.product.price) *
-                            (1 - nearExpiryDisc / 100)
-                          : Number(item.product.price);
-                      return (
-                        <div
-                          key={item.product.id}
-                          className="flex items-center gap-3"
-                        >
-                          <div className="flex-1 min-w-0">
-                            <p className="text-sm font-medium truncate">
-                              {item.product.name}
-                            </p>
-                            <p className="text-xs text-muted-foreground">
-                              ₱{effectivePrice.toFixed(2)} × {item.quantity}
-                              {nearExpiryDisc > 0 && (
-                                <span className="text-warning ml-1">
-                                  (-{nearExpiryDisc}%)
-                                </span>
-                              )}
-                            </p>
-                          </div>
-                          <div className="flex items-center gap-1">
-                            <Button
-                              size="icon"
-                              variant="outline"
-                              className="h-7 w-7"
-                              onClick={() =>
-                                updateQuantity(item.product.id, -1)
-                              }
-                            >
-                              <Minus className="h-3 w-3" />
-                            </Button>
-                            <span className="w-8 text-center text-sm font-medium">
-                              {item.quantity}
-                            </span>
-                            <Button
-                              size="icon"
-                              variant="outline"
-                              className="h-7 w-7"
-                              onClick={() => updateQuantity(item.product.id, 1)}
-                            >
-                              <Plus className="h-3 w-3" />
-                            </Button>
-                            <Button
-                              size="icon"
-                              variant="ghost"
-                              className="h-7 w-7 text-destructive"
-                              onClick={() => removeFromCart(item.product.id)}
-                            >
-                              <Trash2 className="h-3 w-3" />
-                            </Button>
-                          </div>
-                          <p className="text-sm font-medium w-20 text-right">
-                            ₱{(effectivePrice * item.quantity).toFixed(2)}
-                          </p>
-                        </div>
-                      );
-                    })}
-                  </div>
+        {/* ══════════════════════════════════════════════════
+            DESKTOP layout  (hidden below lg)
+            Left 3/5: barcode + search + products
+            Right 2/5: sticky cart, self-contained scroll
+            ══════════════════════════════════════════════════ */}
+        <div className="hidden lg:grid lg:grid-cols-5 gap-6">
+          {/* Left — barcode + products */}
+          <div className="lg:col-span-3 space-y-4">
+            <BarcodeScanner onScan={handleBarcodeScan} />
 
-                  {/* PWD / Senior Discount Toggle */}
-                  <div className="border-t pt-3">
-                    <div className="flex gap-2 mb-3">
-                      <Button
-                        variant={discountType === "pwd" ? "default" : "outline"}
-                        size="sm"
-                        className="flex-1 text-xs"
-                        onClick={() =>
-                          setDiscountType(
-                            discountType === "pwd" ? "none" : "pwd",
-                          )
-                        }
-                      >
-                        <UserCheck className="h-3 w-3 mr-1" /> PWD
-                      </Button>
-                      <Button
-                        variant={
-                          discountType === "senior" ? "default" : "outline"
-                        }
-                        size="sm"
-                        className="flex-1 text-xs"
-                        onClick={() =>
-                          setDiscountType(
-                            discountType === "senior" ? "none" : "senior",
-                          )
-                        }
-                      >
-                        <UserCheck className="h-3 w-3 mr-1" /> Senior
-                      </Button>
-                    </div>
-                    {isDiscounted && (
-                      <div className="mb-3 p-3 rounded-lg border bg-muted/30 space-y-2">
-                        <label className="text-xs font-medium text-muted-foreground">
-                          {discountType === "pwd" ? "PWD" : "Senior Citizen"} ID
-                          Number *
-                        </label>
-                        <Input
-                          value={customerIdNumber}
-                          onChange={(e) => setCustomerIdNumber(e.target.value)}
-                          placeholder="Enter ID number"
-                          className="text-sm"
-                        />
-                      </div>
-                    )}
+            <div className="flex gap-3">
+              <div className="relative flex-1">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input
+                  placeholder="Search by name, barcode, or SKU..."
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  className="pl-10"
+                />
+              </div>
+              <Select value={categoryFilter} onValueChange={setCategoryFilter}>
+                <SelectTrigger className="w-44">
+                  <SelectValue placeholder="All Categories" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Categories</SelectItem>
+                  {categories?.map((c) => (
+                    <SelectItem key={c.id} value={c.id}>
+                      {c.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
 
-                    {/* Price breakdown */}
-                    {isDiscounted ? (
-                      <div className="space-y-1 mb-2">
-                        <div className="flex justify-between text-sm text-muted-foreground">
-                          <span>Original Price (VAT-incl.)</span>
-                          <span>₱{cartSubtotal.toFixed(2)}</span>
-                        </div>
-                        <div className="flex justify-between text-sm text-muted-foreground">
-                          <span>VAT Removed (12%)</span>
-                          <span className="text-destructive">
-                            -₱{(cartSubtotal - vatExemptSubtotal).toFixed(2)}
-                          </span>
-                        </div>
-                        <div className="flex justify-between text-sm text-muted-foreground">
-                          <span>VAT-Exempt Price</span>
-                          <span>₱{vatExemptSubtotal.toFixed(2)}</span>
-                        </div>
-                        <div className="flex justify-between text-sm text-muted-foreground">
-                          <span>20% {discountType.toUpperCase()} Discount</span>
-                          <span className="text-destructive">
-                            -₱{pwdSeniorDiscount.toFixed(2)}
-                          </span>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="space-y-1 mb-2">
-                        <div className="flex justify-between text-sm text-muted-foreground">
-                          <span>Net (excl. VAT)</span>
-                          <span>₱{netAmount.toFixed(2)}</span>
-                        </div>
-                        <div className="flex justify-between text-sm text-muted-foreground">
-                          <span>VAT (12%)</span>
-                          <span>₱{vatAmount.toFixed(2)}</span>
-                        </div>
-                      </div>
-                    )}
+            <ProductGrid />
+            <PaginationBar />
+          </div>
 
-                    <div className="flex justify-between items-center mb-4">
-                      <span className="text-lg font-semibold">Total</span>
-                      <div className="text-right">
-                        <span className="text-xl font-bold text-success">
-                          ₱{cartTotal.toFixed(2)}
-                        </span>
-                        {isDiscounted && (
-                          <p className="text-xs text-muted-foreground">
-                            You save ₱{discountAmount.toFixed(2)}
-                          </p>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Cash Calculator Toggle */}
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="w-full mb-3"
-                      onClick={() => {
-                        setShowCalc(!showCalc);
-                        if (!showCalc) setCashTendered(0);
-                      }}
-                    >
-                      <Calculator className="h-4 w-4 mr-2" />
-                      {showCalc ? "Hide Calculator" : "Cash Calculator"}
-                    </Button>
-
-                    {showCalc && (
-                      <div className="space-y-3 mb-3 p-3 rounded-lg border bg-muted/30">
-                        <div className="space-y-1">
-                          <label className="text-xs font-medium text-muted-foreground">
-                            Cash Tendered
-                          </label>
-                          <Input
-                            type="number"
-                            value={cashTendered || ""}
-                            onChange={(e) =>
-                              setCashTendered(Number(e.target.value))
-                            }
-                            placeholder="0.00"
-                            className="text-lg font-semibold"
-                          />
-                        </div>
-                        <div className="grid grid-cols-3 gap-1.5">
-                          {QUICK_CASH.map((amount) => (
-                            <Button
-                              key={amount}
-                              variant="outline"
-                              size="sm"
-                              className="text-xs h-8"
-                              onClick={() =>
-                                setCashTendered((prev) => prev + amount)
-                              }
-                            >
-                              +₱{amount}
-                            </Button>
-                          ))}
-                        </div>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="w-full text-xs"
-                          onClick={() => setCashTendered(Math.ceil(cartTotal))}
-                        >
-                          Exact Amount
-                        </Button>
-                        <div
-                          className={`flex justify-between items-center p-2 rounded-md ${changeAmount >= 0 ? "bg-success/10" : "bg-destructive/10"}`}
-                        >
-                          <span className="text-sm font-medium">Change</span>
-                          <span
-                            className={`text-lg font-bold ${changeAmount >= 0 ? "text-success" : "text-destructive"}`}
-                          >
-                            ₱
-                            {changeAmount >= 0
-                              ? changeAmount.toFixed(2)
-                              : "0.00"}
-                          </span>
-                        </div>
-                      </div>
-                    )}
-
-                    <div className="grid grid-cols-2 gap-2">
-                      {showCalc ? (
-                        <Button
-                          className="h-12 col-span-1"
-                          variant="outline"
-                          onClick={handleCashCheckout}
-                          disabled={
-                            checkoutMutation.isPending ||
-                            cashTendered < cartTotal
-                          }
-                        >
-                          <Banknote className="h-4 w-4 mr-2" /> Pay Cash
-                        </Button>
-                      ) : (
-                        <Button
-                          className="h-12"
-                          variant="outline"
-                          onClick={() => {
-                            setShowCalc(true);
-                            setCashTendered(0);
-                          }}
-                          disabled={checkoutMutation.isPending}
-                        >
-                          <Banknote className="h-4 w-4 mr-2" /> Cash
-                        </Button>
-                      )}
-                      <Button
-                        className="h-12"
-                        onClick={() => checkoutMutation.mutate("card")}
-                        disabled={checkoutMutation.isPending}
-                      >
-                        <CreditCard className="h-4 w-4 mr-2" /> Card
-                      </Button>
-                    </div>
-                  </div>
-                </>
-              )}
-            </CardContent>
-          </Card>
+          {/* Right — sticky cart, own internal scroll */}
+          <div className="lg:col-span-2">
+            <Card
+              className="sticky top-6 flex flex-col"
+              style={{ maxHeight: "calc(100vh - 5rem)" }}
+            >
+              <CardHeader className="pb-3 shrink-0">
+                <CardTitle className="text-base flex items-center justify-between">
+                  <span>
+                    Cart ({cart.reduce((s, i) => s + i.quantity, 0)} items)
+                  </span>
+                </CardTitle>
+              </CardHeader>
+              {/* This div is the only thing that scrolls on desktop */}
+              <CardContent
+                className="flex-1 overflow-y-auto pt-0"
+                style={{ minHeight: 0 }}
+              >
+                <CartBody
+                  cart={cart}
+                  discountType={discountType}
+                  customerIdNumber={customerIdNumber}
+                  setCustomerIdNumber={setCustomerIdNumber}
+                  setDiscountType={setDiscountType}
+                  showCalc={showCalc}
+                  setShowCalc={setShowCalc}
+                  cashTendered={cashTendered}
+                  setCashTendered={setCashTendered}
+                  cartSubtotal={cartSubtotal}
+                  vatExemptSubtotal={vatExemptSubtotal}
+                  pwdSeniorDiscount={pwdSeniorDiscount}
+                  cartTotal={cartTotal}
+                  vatAmount={vatAmount}
+                  netAmount={netAmount}
+                  discountAmount={discountAmount}
+                  changeAmount={changeAmount}
+                  checkoutMutation={checkoutMutation}
+                  updateQuantity={updateQuantity}
+                  removeFromCart={removeFromCart}
+                  handleCashCheckout={handleCashCheckout}
+                />
+              </CardContent>
+            </Card>
+          </div>
         </div>
       </div>
 
-      {/* Receipt Dialog */}
+      {/* ── Receipt dialog ─────────────────────────────────────────────────── */}
       <Dialog open={showReceipt} onOpenChange={setShowReceipt}>
         <DialogContent className="max-w-sm">
           <DialogHeader>
@@ -707,8 +712,16 @@ export default function Sales() {
                   Transaction #{lastTransaction.id.slice(0, 8)}
                 </p>
                 <p className="text-center text-muted-foreground">
-                  {new Date().toLocaleString()}
+                  {format(
+                    new Date(lastTransaction.created_at),
+                    "MMM d, yyyy h:mm a",
+                  )}
                 </p>
+                {lastTransaction.status === "refunded" && (
+                  <p className="text-center font-bold text-destructive">
+                    *** REFUNDED ***
+                  </p>
+                )}
                 {lastTransaction.discountType && (
                   <p className="text-center font-bold">
                     *** {lastTransaction.discountType.toUpperCase()} DISCOUNT
@@ -740,15 +753,13 @@ export default function Sales() {
                       </div>
                       {nearExpiryDisc > 0 && (
                         <p className="text-[10px] text-muted-foreground">
-                          {" "}
-                          Near-expiry discount: -{nearExpiryDisc}%
+                          Near-expiry: -{nearExpiryDisc}%
                         </p>
                       )}
                     </div>
                   );
                 })}
                 <div className="border-t border-dashed my-2" />
-
                 {lastTransaction.discountType ? (
                   <>
                     <div className="flex justify-between">
@@ -793,12 +804,13 @@ export default function Sales() {
                   <span>TOTAL</span>
                   <span>₱{lastTransaction.total.toFixed(2)}</span>
                 </div>
-                {lastTransaction.discountType && (
-                  <div className="flex justify-between font-bold text-sm">
-                    <span>You Saved</span>
-                    <span>₱{lastTransaction.discountAmount.toFixed(2)}</span>
-                  </div>
-                )}
+                {lastTransaction.discountType &&
+                  lastTransaction.discountAmount > 0 && (
+                    <div className="flex justify-between font-bold text-sm">
+                      <span>You Saved</span>
+                      <span>₱{lastTransaction.discountAmount.toFixed(2)}</span>
+                    </div>
+                  )}
                 {lastTransaction.method === "cash" &&
                   lastTransaction.cashTendered != null && (
                     <>
@@ -812,20 +824,32 @@ export default function Sales() {
                       </div>
                     </>
                   )}
-                <p className="text-center mt-2">
+                <p className="text-center mt-1">
                   Paid via {lastTransaction.method}
+                </p>
+                <p className="text-center text-muted-foreground">
+                  Cashier: {lastTransaction.cashierName || "—"}
                 </p>
                 <p className="text-center text-muted-foreground mt-2">
                   Thank you for shopping!
                 </p>
               </div>
-              <Button onClick={handlePrint} className="w-full mt-2">
-                <Printer className="h-4 w-4 mr-2" /> Print Receipt
-              </Button>
+              <div className="flex gap-2 mt-2">
+                <Button onClick={handlePrint} className="flex-1">
+                  <Printer className="h-4 w-4 mr-2" /> Print
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={handleDownloadReceipt}
+                  className="flex-1"
+                >
+                  <Download className="h-4 w-4 mr-2" /> Download
+                </Button>
+              </div>
             </>
           )}
         </DialogContent>
       </Dialog>
-    </div>
+    </>
   );
 }
