@@ -1,6 +1,8 @@
+/* eslint-disable react-hooks/static-components */
+/* eslint-disable react-hooks/set-state-in-effect */
 /* eslint-disable no-useless-escape */
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { useState, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent } from "@/components/ui/card";
@@ -54,6 +56,8 @@ import {
   Undo2,
   Printer,
   Download,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
 import { format, startOfDay, endOfDay } from "date-fns";
 import { cn } from "@/lib/utils";
@@ -62,6 +66,8 @@ import { useUserRole } from "@/hooks/useUserRole";
 
 type SortKey = "created_at" | "total_amount";
 type SortDir = "asc" | "desc";
+
+const ITEMS_PER_PAGE = 20;
 
 export default function TransactionHistory() {
   const [search, setSearch] = useState("");
@@ -76,20 +82,42 @@ export default function TransactionHistory() {
   const [refundTxId, setRefundTxId] = useState<string | null>(null);
   const [unrefundTxId, setUnrefundTxId] = useState<string | null>(null);
   const [receiptTxId, setReceiptTxId] = useState<string | null>(null);
+  const [currentPage, setCurrentPage] = useState(1);
   const receiptRef = useRef<HTMLDivElement>(null);
   const queryClient = useQueryClient();
   const { isAdmin } = useUserRole();
 
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [
+    search,
+    paymentFilter,
+    statusFilter,
+    employeeFilter,
+    dateFrom,
+    dateTo,
+    sortKey,
+    sortDir,
+  ]);
+
   const { data: employees } = useQuery({
     queryKey: ["employees-list"],
     queryFn: async () => {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from("employees")
-        .select("id, name")
+        .select("user_id, name")
         .order("name");
+
+      if (error) throw error;
       return data || [];
     },
   });
+
+  const employeeMap = useMemo(() => {
+    return Object.fromEntries(
+      (employees || []).map((e) => [e.user_id, e.name]),
+    );
+  }, [employees]);
 
   const { data: transactions } = useQuery({
     queryKey: [
@@ -104,7 +132,7 @@ export default function TransactionHistory() {
     queryFn: async () => {
       let query = supabase
         .from("transactions")
-        .select("*, employees(name)")
+        .select("*")
         .order("created_at", { ascending: false })
         .limit(200);
       if (search) query = query.ilike("id", `%${search}%`);
@@ -135,6 +163,12 @@ export default function TransactionHistory() {
     const cmp = Number(a.total_amount) - Number(b.total_amount);
     return sortDir === "asc" ? cmp : -cmp;
   });
+
+  const totalPages = Math.ceil(sortedTransactions.length / ITEMS_PER_PAGE);
+  const paginatedTransactions = sortedTransactions.slice(
+    (currentPage - 1) * ITEMS_PER_PAGE,
+    currentPage * ITEMS_PER_PAGE,
+  );
 
   const toggleSort = (key: SortKey) => {
     if (sortKey === key) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
@@ -289,6 +323,69 @@ export default function TransactionHistory() {
     dateFrom ||
     dateTo;
 
+  const PaginationBar = () => {
+    if (totalPages <= 1) return null;
+    return (
+      <div className="flex items-center justify-between pt-3 px-4 pb-3">
+        <p className="text-sm text-muted-foreground">
+          {(currentPage - 1) * ITEMS_PER_PAGE + 1}–
+          {Math.min(currentPage * ITEMS_PER_PAGE, sortedTransactions.length)} of{" "}
+          {sortedTransactions.length}
+        </p>
+        <div className="flex items-center gap-1">
+          <Button
+            variant="outline"
+            size="icon"
+            className="h-8 w-8"
+            onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+            disabled={currentPage === 1}
+          >
+            <ChevronLeft className="h-4 w-4" />
+          </Button>
+          {Array.from({ length: totalPages }, (_, i) => i + 1)
+            .filter(
+              (p) =>
+                p === 1 || p === totalPages || Math.abs(p - currentPage) <= 1,
+            )
+            .reduce<(number | "...")[]>((acc, p, idx, arr) => {
+              if (idx > 0 && (p as number) - (arr[idx - 1] as number) > 1)
+                acc.push("...");
+              acc.push(p);
+              return acc;
+            }, [])
+            .map((p, i) =>
+              p === "..." ? (
+                <span
+                  key={`e-${i}`}
+                  className="px-1 text-sm text-muted-foreground"
+                >
+                  …
+                </span>
+              ) : (
+                <Button
+                  key={p}
+                  variant={currentPage === p ? "default" : "outline"}
+                  size="icon"
+                  className="h-8 w-8 text-xs"
+                  onClick={() => setCurrentPage(p as number)}
+                >
+                  {p}
+                </Button>
+              ),
+            )}
+          <Button
+            variant="outline"
+            size="icon"
+            className="h-8 w-8"
+            onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+            disabled={currentPage === totalPages}
+          >
+            <ChevronRight className="h-4 w-4" />
+          </Button>
+        </div>
+      </div>
+    );
+  };
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -389,8 +486,8 @@ export default function TransactionHistory() {
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All Employees</SelectItem>
-            {employees?.map((e) => (
-              <SelectItem key={e.id} value={e.id}>
+            {employees?.map((e, index) => (
+              <SelectItem key={index} value={e.user_id}>
                 {e.name}
               </SelectItem>
             ))}
@@ -428,7 +525,7 @@ export default function TransactionHistory() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {sortedTransactions.map((tx) => {
+              {paginatedTransactions.map((tx) => {
                 const vatAmount =
                   Number(tx.vat_amount) || (Number(tx.total_amount) * 12) / 112;
                 return (
@@ -439,7 +536,7 @@ export default function TransactionHistory() {
                     <TableCell>
                       {format(new Date(tx.created_at), "MMM d, yyyy h:mm a")}
                     </TableCell>
-                    <TableCell>{(tx.employees as any)?.name || "—"}</TableCell>
+                    <TableCell>{employeeMap[tx.employee_id] || "—"}</TableCell>
                     <TableCell>
                       <Badge variant="secondary">{tx.payment_method}</Badge>
                     </TableCell>
@@ -506,7 +603,7 @@ export default function TransactionHistory() {
                   </TableRow>
                 );
               })}
-              {sortedTransactions.length === 0 && (
+              {paginatedTransactions.length === 0 && (
                 <TableRow>
                   <TableCell
                     colSpan={8}
@@ -518,6 +615,7 @@ export default function TransactionHistory() {
               )}
             </TableBody>
           </Table>
+          <PaginationBar />
         </CardContent>
       </Card>
 
@@ -826,7 +924,7 @@ export default function TransactionHistory() {
                   Paid via {receiptTx.payment_method}
                 </p>
                 <p className="text-center text-muted-foreground">
-                  Cashier: {(receiptTx.employees as any)?.name || "—"}
+                  Cashier: {employeeMap[receiptTx.employee_id] || "—"}
                 </p>
                 <p className="text-center text-muted-foreground mt-2">
                   Thank you for shopping!
