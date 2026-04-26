@@ -1,10 +1,9 @@
-/* eslint-disable @typescript-eslint/no-unused-vars */
 /* eslint-disable react-hooks/preserve-manual-memoization */
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -33,7 +32,6 @@ import {
   ResponsiveContainer,
   Legend,
   Cell,
-  LineChart,
   Line,
   PieChart,
   Pie,
@@ -366,7 +364,6 @@ export default function Reports() {
   );
   const refundCount = refundedTx.length;
   const totalVat = transactions.reduce((s, t) => s + Number(t.vat_amount), 0);
-  const totalCost = inventoryValue?.totalCost || 0;
   const totalWasteLoss = disposedItems.reduce(
     (s, d) => s + Number(d.total_loss || 0),
     0,
@@ -862,7 +859,7 @@ export default function Reports() {
               </div>
 
               {/* Stacked area for cumulative view */}
-              <div className="h-[200px]">
+              <div className="h-50">
                 <ResponsiveContainer width="100%" height="100%">
                   <AreaChart data={dailyTrend}>
                     <defs>
@@ -948,7 +945,7 @@ export default function Reports() {
                   No data for this period
                 </p>
               ) : (
-                <div className="h-[300px]">
+                <div className="h-75">
                   <ResponsiveContainer width="100%" height="100%">
                     <ComposedChart data={peakHours} barCategoryGap="20%">
                       <defs>
@@ -1037,7 +1034,7 @@ export default function Reports() {
               />
             </CardHeader>
             <CardContent>
-              <div className="h-[260px]">
+              <div className="h-65">
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={dowPerf} barCategoryGap="30%">
                     <CartesianGrid {...gridStyle} />
