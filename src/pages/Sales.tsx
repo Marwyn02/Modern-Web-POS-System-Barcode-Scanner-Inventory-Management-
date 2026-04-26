@@ -253,6 +253,8 @@ export default function Sales() {
       const {
         data: { user },
       } = await supabase.auth.getUser();
+      if (!user) throw new Error("User not authenticated");
+
       const { data: transaction, error: txError } = await supabase
         .from("transactions")
         .insert({

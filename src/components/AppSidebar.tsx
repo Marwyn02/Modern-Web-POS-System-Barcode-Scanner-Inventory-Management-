@@ -1,5 +1,6 @@
 /* eslint-disable react-hooks/set-state-in-effect */
 /* eslint-disable @typescript-eslint/no-explicit-any */
+
 import {
   LayoutDashboard,
   ShoppingCart,
@@ -35,6 +36,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Popover,
   PopoverContent,
@@ -57,6 +59,12 @@ import { useNavigate } from "react-router-dom";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 type DayStatus = "closed" | "open" | null;
+
+type CashboxForm = {
+  type: "cash_in" | "cash_out";
+  amount: string;
+  reason: string;
+};
 
 // ── Countdown Button ──────────────────────────────────────────────────────────
 // Shows a 10-second countdown before enabling the confirm button — prevents accidental misclicks.
@@ -167,7 +175,7 @@ export function AppSidebar() {
   const [clockInOpen, setClockInOpen] = useState(false);
   const [clockOutOpen, setClockOutOpen] = useState(false);
   const [cashboxOpen, setCashboxOpen] = useState(false);
-  const [cashboxForm, setCashboxForm] = useState({
+  const [cashboxForm, setCashboxForm] = useState<CashboxForm>({
     type: "cash_in",
     amount: "",
     reason: "",
@@ -447,7 +455,7 @@ export function AppSidebar() {
       const { error } = await supabase.from("cashbox_logs").insert({
         employee_id: currentEmployee.id,
         shift_id: activeShift?.id || null,
-        type: cashboxForm.type,
+        type: cashboxForm.type as "cash_in" | "cash_out",
         amount: parseFloat(cashboxForm.amount),
         reason: cashboxForm.reason.trim(),
       });
@@ -634,16 +642,6 @@ export function AppSidebar() {
         data: { user },
       } = await supabase.auth.getUser();
       if (user) {
-        const { data: emp } = await supabase
-          .from("employees")
-          .select("name")
-          .eq("user_id", user.id)
-          .single();
-        await sessionNotify("logout", {
-          id: user.id,
-          email: user.email!,
-          name: emp?.name,
-        });
         await supabase.from("session_access").delete().eq("user_id", user.id);
       }
       await supabase.auth.signOut();
@@ -777,7 +775,7 @@ export function AppSidebar() {
                       <Textarea
                         placeholder="e.g. Holiday shift, skeleton crew, special event…"
                         value={dayNotes}
-                        onChange={(e) => setDayNotes(e.target.value)}
+                        onChange={(e: any) => setDayNotes(e.target.value)}
                         rows={2}
                         className="resize-none text-sm"
                       />
@@ -927,7 +925,7 @@ export function AppSidebar() {
                       <Textarea
                         placeholder="e.g. All balanced, busy holiday shift…"
                         value={dayNotes}
-                        onChange={(e) => setDayNotes(e.target.value)}
+                        onChange={(e: any) => setDayNotes(e.target.value)}
                         rows={2}
                         className="resize-none text-sm"
                       />
@@ -1155,7 +1153,7 @@ export function AppSidebar() {
                           <Label>Type</Label>
                           <Select
                             value={cashboxForm.type}
-                            onValueChange={(v) =>
+                            onValueChange={(v: "cash_in" | "cash_out") =>
                               setCashboxForm({ ...cashboxForm, type: v })
                             }
                           >
@@ -1204,7 +1202,7 @@ export function AppSidebar() {
                           <Textarea
                             placeholder="e.g. Change fund added, petty cash withdrawal…"
                             value={cashboxForm.reason}
-                            onChange={(e) =>
+                            onChange={(e: any) =>
                               setCashboxForm({
                                 ...cashboxForm,
                                 reason: e.target.value,

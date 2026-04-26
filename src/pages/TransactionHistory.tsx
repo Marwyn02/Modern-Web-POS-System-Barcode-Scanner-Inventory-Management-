@@ -486,11 +486,13 @@ export default function TransactionHistory() {
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All Employees</SelectItem>
-            {employees?.map((e, index) => (
-              <SelectItem key={index} value={e.user_id}>
-                {e.name}
-              </SelectItem>
-            ))}
+            {employees
+              ?.filter((e): e is typeof e & { user_id: string } => !!e.user_id)
+              .map((e, index) => (
+                <SelectItem key={index} value={e.user_id}>
+                  {e.name}
+                </SelectItem>
+              ))}
           </SelectContent>
         </Select>
       </div>
@@ -536,7 +538,9 @@ export default function TransactionHistory() {
                     <TableCell>
                       {format(new Date(tx.created_at), "MMM d, yyyy h:mm a")}
                     </TableCell>
-                    <TableCell>{employeeMap[tx.employee_id] || "—"}</TableCell>
+                    <TableCell>
+                      {tx.employee_id ? employeeMap[tx.employee_id] : "—"}
+                    </TableCell>
                     <TableCell>
                       <Badge variant="secondary">{tx.payment_method}</Badge>
                     </TableCell>
@@ -924,7 +928,10 @@ export default function TransactionHistory() {
                   Paid via {receiptTx.payment_method}
                 </p>
                 <p className="text-center text-muted-foreground">
-                  Cashier: {employeeMap[receiptTx.employee_id] || "—"}
+                  Cashier:{" "}
+                  {receiptTx.employee_id
+                    ? employeeMap[receiptTx.employee_id]
+                    : "—"}{" "}
                 </p>
                 <p className="text-center text-muted-foreground mt-2">
                   Thank you for shopping!
