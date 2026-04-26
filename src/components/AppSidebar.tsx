@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-unused-vars */
 /* eslint-disable react-hooks/set-state-in-effect */
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import {
@@ -17,8 +16,6 @@ import {
   ArrowUpCircle,
   Sun,
   Moon,
-  SunMedium,
-  CheckCircle2,
 } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import {
@@ -38,7 +35,6 @@ import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import {
   Popover,
   PopoverContent,
@@ -53,19 +49,11 @@ import {
 } from "@/components/ui/select";
 import { useUserRole } from "@/hooks/useUserRole";
 import { useIsMobile } from "@/hooks/use-mobile";
-import { sessionNotify } from "@/utils/sessionNotify";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import {
-  format,
-  startOfDay,
-  endOfDay,
-  startOfYesterday,
-  endOfYesterday,
-} from "date-fns";
-import { useState, useEffect, useRef, useCallback } from "react";
+import { format, startOfDay, endOfDay } from "date-fns";
+import { useState, useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { useNavigate } from "react-router-dom";
-import { getMonth, getYear } from "date-fns";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 type DayStatus = "closed" | "open" | null;

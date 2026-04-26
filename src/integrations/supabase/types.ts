@@ -38,6 +38,60 @@ export type Database = {
         };
         Relationships: [];
       };
+      session_access: {
+        Row: {
+          id: string;
+          user_id: string;
+          email: string;
+          full_name: string | null;
+          is_active: boolean;
+          requested_at: string | null;
+          granted_at: string | null;
+          revoked_at: string | null;
+          granted_by: string | null;
+          notes: string | null;
+        };
+        Insert: {
+          id?: string;
+          user_id: string;
+          email: string;
+          full_name?: string | null;
+          is_active?: boolean;
+          requested_at?: string | null;
+          granted_at?: string | null;
+          revoked_at?: string | null;
+          granted_by?: string | null;
+          notes?: string | null;
+        };
+        Update: {
+          id?: string;
+          user_id?: string;
+          email?: string;
+          full_name?: string | null;
+          is_active?: boolean;
+          requested_at?: string | null;
+          granted_at?: string | null;
+          revoked_at?: string | null;
+          granted_by?: string | null;
+          notes?: string | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "session_access_user_id_fkey";
+            columns: ["user_id"];
+            isOneToOne: true;
+            referencedRelation: "users";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "session_access_granted_by_fkey";
+            columns: ["granted_by"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
       disposed_items: {
         Row: {
           created_at: string | null;
@@ -188,25 +242,40 @@ export type Database = {
       };
       shifts: {
         Row: {
+          id: string;
+          employee_id: string;
           clock_in: string;
           clock_out: string | null;
           created_at: string;
-          employee_id: string;
-          id: string;
+          starting_cash: number | null;
+          ending_cash: number | null;
+          expected_cash: number | null;
+          cash_difference: number | null;
+          notes: string | null;
         };
         Insert: {
+          id?: string;
+          employee_id: string;
           clock_in?: string;
           clock_out?: string | null;
           created_at?: string;
-          employee_id: string;
-          id?: string;
+          starting_cash?: number | null;
+          ending_cash?: number | null;
+          expected_cash?: number | null;
+          cash_difference?: number | null;
+          notes?: string | null;
         };
         Update: {
+          id?: string;
+          employee_id?: string;
           clock_in?: string;
           clock_out?: string | null;
           created_at?: string;
-          employee_id?: string;
-          id?: string;
+          starting_cash?: number | null;
+          ending_cash?: number | null;
+          expected_cash?: number | null;
+          cash_difference?: number | null;
+          notes?: string | null;
         };
         Relationships: [
           {
@@ -263,6 +332,178 @@ export type Database = {
           },
         ];
       };
+      cashbox_logs: {
+        Row: {
+          id: string;
+          employee_id: string;
+          shift_id: string | null;
+          type: "cash_in" | "cash_out";
+          amount: number;
+          reason: string;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          employee_id: string;
+          shift_id?: string | null;
+          type: "cash_in" | "cash_out";
+          amount?: number;
+          reason: string;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          employee_id?: string;
+          shift_id?: string | null;
+          type?: "cash_in" | "cash_out";
+          amount?: number;
+          reason?: string;
+          created_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "cashbox_logs_employee_id_fkey";
+            columns: ["employee_id"];
+            isOneToOne: false;
+            referencedRelation: "employees";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "cashbox_logs_shift_id_fkey";
+            columns: ["shift_id"];
+            isOneToOne: false;
+            referencedRelation: "shifts";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      daily_logs: {
+        Row: {
+          id: string;
+          log_date: string;
+          total_sales: number;
+          transaction_count: number;
+          vat_amount: number;
+          discount_amount: number;
+          refund_amount: number;
+          refund_count: number;
+          cash_sales: number;
+          card_sales: number;
+          stock_loss: number;
+          net_profit: number;
+          closed_by: string | null;
+          notes: string | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          log_date: string;
+          total_sales?: number;
+          transaction_count?: number;
+          vat_amount?: number;
+          discount_amount?: number;
+          refund_amount?: number;
+          refund_count?: number;
+          cash_sales?: number;
+          card_sales?: number;
+          stock_loss?: number;
+          net_profit?: number;
+          closed_by?: string | null;
+          notes?: string | null;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          log_date?: string;
+          total_sales?: number;
+          transaction_count?: number;
+          vat_amount?: number;
+          discount_amount?: number;
+          refund_amount?: number;
+          refund_count?: number;
+          cash_sales?: number;
+          card_sales?: number;
+          stock_loss?: number;
+          net_profit?: number;
+          closed_by?: string | null;
+          notes?: string | null;
+          created_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "daily_logs_closed_by_fkey";
+            columns: ["closed_by"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      monthly_logs: {
+        Row: {
+          id: string;
+          log_year: number;
+          log_month: number;
+          total_sales: number;
+          transaction_count: number;
+          vat_amount: number;
+          discount_amount: number;
+          refund_amount: number;
+          refund_count: number;
+          cash_sales: number;
+          card_sales: number;
+          stock_loss: number;
+          net_profit: number;
+          closed_by: string | null;
+          notes: string | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          log_year: number;
+          log_month: number;
+          total_sales?: number;
+          transaction_count?: number;
+          vat_amount?: number;
+          discount_amount?: number;
+          refund_amount?: number;
+          refund_count?: number;
+          cash_sales?: number;
+          card_sales?: number;
+          stock_loss?: number;
+          net_profit?: number;
+          closed_by?: string | null;
+          notes?: string | null;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          log_year?: number;
+          log_month?: number;
+          total_sales?: number;
+          transaction_count?: number;
+          vat_amount?: number;
+          discount_amount?: number;
+          refund_amount?: number;
+          refund_count?: number;
+          cash_sales?: number;
+          card_sales?: number;
+          stock_loss?: number;
+          net_profit?: number;
+          closed_by?: string | null;
+          notes?: string | null;
+          created_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "monthly_logs_closed_by_fkey";
+            columns: ["closed_by"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
       transactions: {
         Row: {
           cash_tendered: number | null;
@@ -314,7 +555,7 @@ export type Database = {
             foreignKeyName: "transactions_employee_id_fkey";
             columns: ["employee_id"];
             isOneToOne: false;
-            referencedRelation: "employees";
+            referencedRelation: "users";
             referencedColumns: ["id"];
           },
         ];
