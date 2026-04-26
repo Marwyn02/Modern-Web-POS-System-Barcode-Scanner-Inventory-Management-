@@ -1,5 +1,10 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { useQuery } from "@tanstack/react-query";
+// Add these imports at the top
+import { useQuery } from "@tanstack/react-query"; // already there
+import { useUserRole } from "@/hooks/useUserRole"; // add this
+import { Eye, EyeOff, CheckCircle2, XCircle } from "lucide-react"; // add these
+import { useState } from "react"; // add this
+import { format } from "date-fns"; // add this
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -19,6 +24,22 @@ import { subDays } from "date-fns";
 
 export default function Dashboard() {
   const today = new Date().toISOString().split("T")[0];
+
+  const { isAdmin } = useUserRole();
+  const [revenueVisible, setRevenueVisible] = useState(false);
+
+  // Check if today is closed
+  const { data: todayLog } = useQuery({
+    queryKey: ["dashboard-today-log", today],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("daily_logs")
+        .select("log_date, created_at, net_profit")
+        .eq("log_date", today)
+        .maybeSingle();
+      return data;
+    },
+  });
 
   const { data: todayTransactions } = useQuery({
     queryKey: ["dashboard-transactions", today],
@@ -112,6 +133,30 @@ export default function Dashboard() {
         <p className="text-muted-foreground">Today's overview for your store</p>
       </div>
 
+      {/* Day close status */}
+      <div
+        className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm w-fit ${
+          todayLog
+            ? "bg-emerald-50 dark:bg-emerald-950/20 border-emerald-500/20 text-emerald-700 dark:text-emerald-400"
+            : "bg-amber-50 dark:bg-amber-950/20 border-amber-500/20 text-amber-700 dark:text-amber-400"
+        }`}
+      >
+        {todayLog ? (
+          <>
+            <CheckCircle2 className="h-4 w-4 shrink-0" />
+            <span>
+              Store day closed —{" "}
+              {format(new Date(todayLog.created_at), "h:mm a")}
+            </span>
+          </>
+        ) : (
+          <>
+            <XCircle className="h-4 w-4 shrink-0" />
+            <span>Store day not yet closed</span>
+          </>
+        )}
+      </div>
+
       {/* Summary Cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <Card>
@@ -119,9 +164,30 @@ export default function Dashboard() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm text-muted-foreground">Today's Revenue</p>
-                <p className="text-2xl font-bold text-success">
-                  {formatPeso(totalRevenue)}
-                </p>
+                <div className="flex items-center gap-2">
+                  <p className="text-2xl font-bold text-success">
+                    {isAdmin
+                      ? revenueVisible
+                        ? formatPeso(totalRevenue)
+                        : "₱ ••••••"
+                      : "₱ ••••••"}
+                  </p>
+                  {isAdmin && (
+                    <button
+                      onClick={() => setRevenueVisible((v) => !v)}
+                      className="text-muted-foreground hover:text-foreground transition-colors"
+                    >
+                      {revenueVisible ? (
+                        <EyeOff className="h-4 w-4" />
+                      ) : (
+                        <Eye className="h-4 w-4" />
+                      )}
+                    </button>
+                  )}
+                </div>
+                {!isAdmin && (
+                  <p className="text-xs text-muted-foreground">Admin only</p>
+                )}
               </div>
               <div className="h-10 w-10 rounded-lg bg-success/10 flex items-center justify-center">
                 <DollarSign className="h-5 w-5 text-success" />
