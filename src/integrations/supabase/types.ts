@@ -593,7 +593,7 @@ export type Database = {
     };
     Enums: {
       app_role: "admin" | "cashier" | "store_clerk";
-      employee_role: "cashier" | "manager" | "stock_clerk";
+      employee_role: "cashier" | "admin" | "stock_clerk";
       payment_method: "cash" | "card";
       transaction_status: "completed" | "refunded" | "voided";
     };

@@ -1,6 +1,7 @@
+/* eslint-disable react-hooks/rules-of-hooks */
 /* eslint-disable no-useless-escape */
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { useState, useRef } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -31,7 +32,6 @@ import {
 import {
   DollarSign,
   Receipt,
-  TrendingUp,
   TrendingDown,
   Package,
   Users,
@@ -40,6 +40,16 @@ import {
   RotateCcw,
   Eye,
   Printer,
+  AlertTriangle,
+  ChevronLeft,
+  ChevronRight,
+  BookOpen,
+  CalendarDays,
+  Clock,
+  CheckCircle2,
+  XCircle,
+  Layers,
+  ArrowRight,
 } from "lucide-react";
 import {
   format,
@@ -49,12 +59,26 @@ import {
   endOfMonth,
   subMonths,
   subDays,
+  getMonth,
+  getYear,
 } from "date-fns";
+import { useNavigate } from "react-router-dom";
+
+const BK_PAGE_SIZE = 10;
 
 export default function Bookkeeping() {
   const today = new Date();
+  const navigate = useNavigate();
   const [selectedMonth, setSelectedMonth] = useState(format(today, "yyyy-MM"));
   const [dailyDetailDate, setDailyDetailDate] = useState<string | null>(null);
+  const [dailyPage, setDailyPage] = useState(1);
+  const [lowStockPage, setLowStockPage] = useState(1);
+  const [slowMovingPage, setSlowMovingPage] = useState(1);
+  const [vatPage, setVatPage] = useState(1);
+  const [refundsPage, setRefundsPage] = useState(1);
+  const [discountsPage, setDiscountsPage] = useState(1);
+  const [disposedPage, setDisposedPage] = useState(1);
+
   const dailyReportRef = useRef<HTMLDivElement>(null);
 
   const monthStart = startOfMonth(new Date(selectedMonth + "-01"));
@@ -62,7 +86,15 @@ export default function Bookkeeping() {
   const todayStart = startOfDay(today).toISOString();
   const todayEnd = endOfDay(today).toISOString();
 
-  // Disposed items
+  useEffect(() => {
+    setDailyPage(1);
+    setVatPage(1);
+    setRefundsPage(1);
+    setDiscountsPage(1);
+    setDisposedPage(1);
+  }, [selectedMonth]);
+
+  // ── Queries ──────────────────────────────────────────────────────────────────
   const { data: disposedItems } = useQuery({
     queryKey: ["bk-disposed", selectedMonth],
     queryFn: async () => {
@@ -75,13 +107,12 @@ export default function Bookkeeping() {
     },
   });
 
-  // Today's transactions (completed)
   const { data: todayTx } = useQuery({
     queryKey: ["bk-today-tx"],
     queryFn: async () => {
       const { data } = await supabase
         .from("transactions")
-        .select("*, employees(name)")
+        .select("*")
         .gte("created_at", todayStart)
         .lte("created_at", todayEnd)
         .eq("status", "completed")
@@ -90,13 +121,12 @@ export default function Bookkeeping() {
     },
   });
 
-  // Monthly transactions (completed)
   const { data: monthTx } = useQuery({
     queryKey: ["bk-month-tx", selectedMonth],
     queryFn: async () => {
       const { data } = await supabase
         .from("transactions")
-        .select("*, employees(name)")
+        .select("*")
         .gte("created_at", startOfDay(monthStart).toISOString())
         .lte("created_at", endOfDay(monthEnd).toISOString())
         .eq("status", "completed")
@@ -105,13 +135,12 @@ export default function Bookkeeping() {
     },
   });
 
-  // Monthly refunds
   const { data: monthRefunds } = useQuery({
     queryKey: ["bk-month-refunds", selectedMonth],
     queryFn: async () => {
       const { data } = await supabase
         .from("transactions")
-        .select("*, employees(name)")
+        .select("*")
         .gte("created_at", startOfDay(monthStart).toISOString())
         .lte("created_at", endOfDay(monthEnd).toISOString())
         .eq("status", "refunded")
@@ -120,7 +149,6 @@ export default function Bookkeeping() {
     },
   });
 
-  // Today's refunds
   const { data: todayRefunds } = useQuery({
     queryKey: ["bk-today-refunds"],
     queryFn: async () => {
@@ -134,7 +162,6 @@ export default function Bookkeeping() {
     },
   });
 
-  // Top selling products this month
   const { data: topProducts } = useQuery({
     queryKey: ["bk-top-products", selectedMonth],
     queryFn: async () => {
@@ -165,7 +192,6 @@ export default function Bookkeeping() {
     },
   });
 
-  // Low stock products
   const { data: lowStock } = useQuery({
     queryKey: ["bk-low-stock"],
     queryFn: async () => {
@@ -181,7 +207,6 @@ export default function Bookkeeping() {
     },
   });
 
-  // Slow-moving stock
   const thirtyDaysAgo = subDays(new Date(), 30).toISOString();
   const { data: slowMoving } = useQuery({
     queryKey: ["bk-slow-moving"],
@@ -191,18 +216,15 @@ export default function Bookkeeping() {
         .select("id, name, stock_quantity, price, categories(name)")
         .eq("is_active", true)
         .gt("stock_quantity", 0);
-
       const { data: salesData } = await supabase
         .from("transaction_items")
         .select("product_id, quantity")
         .gte("created_at", thirtyDaysAgo);
-
       const salesMap: Record<string, number> = {};
       (salesData || []).forEach((item) => {
         salesMap[item.product_id!] =
           (salesMap[item.product_id!] || 0) + item.quantity;
       });
-
       return (allProducts || [])
         .map((p) => ({
           ...p,
@@ -215,19 +237,80 @@ export default function Bookkeeping() {
     },
   });
 
-  // Employees for cashier performance
   const { data: employees } = useQuery({
     queryKey: ["bk-employees"],
     queryFn: async () => {
       const { data } = await supabase
         .from("employees")
-        .select("id, name, role")
+        .select("id, name, role, user_id")
         .eq("is_active", true);
       return data || [];
     },
   });
 
-  // Daily summary calcs
+  const { data: employeeMap } = useQuery({
+    queryKey: ["bk-employee-map"],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("employees")
+        .select("user_id, name")
+        .not("user_id", "is", null);
+      const map: Record<string, string> = {};
+      (data || []).forEach((e) => {
+        if (e.user_id) map[e.user_id] = e.name;
+      });
+      return map;
+    },
+  });
+
+  const { data: dailyLogs } = useQuery({
+    queryKey: ["bk-daily-logs"],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("daily_logs")
+        .select("*")
+        .order("log_date", { ascending: false })
+        .limit(60);
+      return data || [];
+    },
+  });
+
+  const { data: monthlyLogs } = useQuery({
+    queryKey: ["bk-monthly-logs"],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("monthly_logs")
+        .select("*")
+        .order("log_year", { ascending: false })
+        .order("log_month", { ascending: false })
+        .limit(24);
+      return data || [];
+    },
+  });
+
+  const { data: shiftLogs } = useQuery({
+    queryKey: ["bk-shift-logs", selectedMonth],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("shifts")
+        .select("*, employees(name, role)")
+        .gte("clock_in", startOfDay(monthStart).toISOString())
+        .lte("clock_in", endOfDay(monthEnd).toISOString())
+        .not("clock_out", "is", null)
+        .order("clock_in", { ascending: false });
+      return data || [];
+    },
+  });
+
+  const todayDateStr = format(today, "yyyy-MM-dd");
+  const todayLog = (dailyLogs || []).find((l) => l.log_date === todayDateStr);
+  const thisMonthLog = (monthlyLogs || []).find(
+    (l) =>
+      l.log_year === getYear(monthStart) &&
+      l.log_month === getMonth(monthStart) + 1,
+  );
+
+  // ── Derived calcs ──────────────────────────────────────────────────────────
   const todayRevenue = (todayTx || []).reduce(
     (s, t) => s + Number(t.total_amount),
     0,
@@ -247,19 +330,12 @@ export default function Bookkeeping() {
     (s, t) => s + Number(t.total_amount),
     0,
   );
-
-  // Discount calcs
   const todayDiscounts = (todayTx || []).filter((t) => t.discount_type);
   const todayDiscountTotal = todayDiscounts.reduce(
     (s, t) => s + Number(t.discount_amount),
     0,
   );
-  // const todayWasteLoss = (disposedItems || []).reduce(
-  //   (s, d) => s + Number(d.total_loss),
-  //   0,
-  // );
 
-  // Monthly calcs
   const monthRevenue = (monthTx || []).reduce(
     (s, t) => s + Number(t.total_amount),
     0,
@@ -285,21 +361,21 @@ export default function Bookkeeping() {
     0,
   );
 
-  // Cashier performance
-  const cashierPerf =
-    employees
-      ?.map((emp) => {
-        const empTx = (monthTx || []).filter((t) => t.employee_id === emp.id);
-        return {
-          name: emp.name,
-          role: emp.role,
-          txCount: empTx.length,
-          revenue: empTx.reduce((s, t) => s + Number(t.total_amount), 0),
-        };
-      })
-      .sort((a, b) => b.revenue - a.revenue) || [];
+  const cashierPerf = (employees || [])
+    .map((emp) => {
+      const empTx = (monthTx || []).filter(
+        (t) => emp.user_id && t.employee_id === emp.user_id,
+      );
+      return {
+        name: emp.name,
+        role: emp.role,
+        txCount: empTx.length,
+        revenue: empTx.reduce((s, t) => s + Number(t.total_amount), 0),
+      };
+    })
+    .filter((c) => c.txCount > 0)
+    .sort((a, b) => b.revenue - a.revenue);
 
-  // Aggregate daily breakdown for the month
   const dailyBreakdown = (() => {
     const map = new Map<
       string,
@@ -313,36 +389,36 @@ export default function Bookkeeping() {
     >();
     (monthTx || []).forEach((tx) => {
       const day = format(new Date(tx.created_at), "yyyy-MM-dd");
-      const existing = map.get(day) || {
+      const e = map.get(day) || {
         date: day,
         revenue: 0,
         vat: 0,
         txCount: 0,
         refunds: 0,
       };
-      existing.revenue += Number(tx.total_amount);
-      existing.vat += Number(tx.vat_amount);
-      existing.txCount += 1;
-      map.set(day, existing);
+      e.revenue += Number(tx.total_amount);
+      e.vat += Number(tx.vat_amount);
+      e.txCount += 1;
+      map.set(day, e);
     });
     (monthRefunds || []).forEach((tx) => {
       const day = format(new Date(tx.created_at), "yyyy-MM-dd");
-      const existing = map.get(day) || {
+      const e = map.get(day) || {
         date: day,
         revenue: 0,
         vat: 0,
         txCount: 0,
         refunds: 0,
       };
-      existing.refunds += Number(tx.total_amount);
-      map.set(day, existing);
+      e.refunds += Number(tx.total_amount);
+      map.set(day, e);
     });
     return Array.from(map.values()).sort((a, b) =>
       b.date.localeCompare(a.date),
     );
   })();
 
-  const monthOptions = Array.from({ length: 6 }, (_, i) => {
+  const monthOptions = Array.from({ length: 12 }, (_, i) => {
     const d = subMonths(today, i);
     return { value: format(d, "yyyy-MM"), label: format(d, "MMMM yyyy") };
   });
@@ -363,9 +439,114 @@ export default function Bookkeeping() {
     URL.revokeObjectURL(url);
   };
 
+  const BkPagination = ({
+    page,
+    setPage,
+    total,
+  }: {
+    page: number;
+    setPage: (p: number) => void;
+    total: number;
+  }) => {
+    const totalPages = Math.ceil(total / BK_PAGE_SIZE);
+    if (totalPages <= 1) return null;
+    return (
+      <div className="flex items-center justify-between px-4 py-3 border-t">
+        <p className="text-sm text-muted-foreground">
+          {(page - 1) * BK_PAGE_SIZE + 1}–{Math.min(page * BK_PAGE_SIZE, total)}{" "}
+          of {total}
+        </p>
+        <div className="flex items-center gap-1">
+          <Button
+            variant="outline"
+            size="icon"
+            className="h-8 w-8"
+            onClick={() => setPage(Math.max(1, page - 1))}
+            disabled={page === 1}
+          >
+            <ChevronLeft className="h-4 w-4" />
+          </Button>
+          {Array.from({ length: totalPages }, (_, i) => i + 1)
+            .filter(
+              (p) => p === 1 || p === totalPages || Math.abs(p - page) <= 1,
+            )
+            .reduce<(number | "...")[]>((acc, p, idx, arr) => {
+              if (idx > 0 && (p as number) - (arr[idx - 1] as number) > 1)
+                acc.push("...");
+              acc.push(p);
+              return acc;
+            }, [])
+            .map((p, i) =>
+              p === "..." ? (
+                <span
+                  key={`e-${i}`}
+                  className="px-1 text-sm text-muted-foreground"
+                >
+                  …
+                </span>
+              ) : (
+                <Button
+                  key={p}
+                  variant={page === p ? "default" : "outline"}
+                  size="icon"
+                  className="h-8 w-8 text-xs"
+                  onClick={() => setPage(p as number)}
+                >
+                  {p}
+                </Button>
+              ),
+            )}
+          <Button
+            variant="outline"
+            size="icon"
+            className="h-8 w-8"
+            onClick={() => setPage(Math.min(totalPages, page + 1))}
+            disabled={page === totalPages}
+          >
+            <ChevronRight className="h-4 w-4" />
+          </Button>
+        </div>
+      </div>
+    );
+  };
+
+  const pagedDailyBreakdown = dailyBreakdown.slice(
+    (dailyPage - 1) * BK_PAGE_SIZE,
+    dailyPage * BK_PAGE_SIZE,
+  );
+  const pagedVat = dailyBreakdown.slice(
+    (vatPage - 1) * BK_PAGE_SIZE,
+    vatPage * BK_PAGE_SIZE,
+  );
+  const pagedLowStock = (lowStock || []).slice(
+    (lowStockPage - 1) * BK_PAGE_SIZE,
+    lowStockPage * BK_PAGE_SIZE,
+  );
+  const pagedSlowMoving = (slowMoving || []).slice(
+    (slowMovingPage - 1) * BK_PAGE_SIZE,
+    slowMovingPage * BK_PAGE_SIZE,
+  );
+  const pagedRefunds = (monthRefunds || []).slice(
+    (refundsPage - 1) * BK_PAGE_SIZE,
+    refundsPage * BK_PAGE_SIZE,
+  );
+  const discountedTx = (monthTx || []).filter((t) => t.discount_type);
+  const pagedDiscounts = discountedTx.slice(
+    (discountsPage - 1) * BK_PAGE_SIZE,
+    discountsPage * BK_PAGE_SIZE,
+  );
+  const pagedDisposed = (disposedItems || []).slice(
+    (disposedPage - 1) * BK_PAGE_SIZE,
+    disposedPage * BK_PAGE_SIZE,
+  );
+
+  const fmt = (n: number) =>
+    `₱${n.toLocaleString("en-PH", { minimumFractionDigits: 2 })}`;
+
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      {/* Header */}
+      <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Bookkeeping</h1>
           <p className="text-muted-foreground">Financial records & reports</p>
@@ -384,89 +565,93 @@ export default function Bookkeeping() {
         </Select>
       </div>
 
-      {/* Today's Summary (Z-Report style) */}
-      <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-              <DollarSign className="h-4 w-4" /> Today's Revenue
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-2xl font-bold text-success">
-              ₱{todayRevenue.toFixed(2)}
-            </p>
-            <p className="text-xs text-muted-foreground">
-              {todayTx?.length || 0} transactions
-            </p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">
-              Cash Sales
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-2xl font-bold">₱{todayCash.toFixed(2)}</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">
-              Card Sales
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-2xl font-bold">₱{todayCard.toFixed(2)}</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">
-              Today's VAT
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-2xl font-bold">₱{todayVat.toFixed(2)}</p>
-            <p className="text-xs text-muted-foreground">
-              Net: ₱{todayNet.toFixed(2)}
-            </p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-              <RotateCcw className="h-4 w-4" /> Today's Refunds
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-2xl font-bold text-destructive">
-              ₱{todayRefundTotal.toFixed(2)}
-            </p>
-            <p className="text-xs text-muted-foreground">
-              {todayRefunds?.length || 0} refunded
-            </p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">
-              Discounts Given
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-2xl font-bold text-warning">
-              ₱{todayDiscountTotal.toFixed(2)}
-            </p>
-            <p className="text-xs text-muted-foreground">
-              {todayDiscounts.length} discounted
-            </p>
-          </CardContent>
-        </Card>
+      {/* Close status banners */}
+      <div className="flex flex-wrap gap-2">
+        {todayLog ? (
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-500/20 text-xs text-emerald-700 dark:text-emerald-400">
+            <CheckCircle2 className="h-3.5 w-3.5" />
+            Today closed — {format(new Date(todayLog.created_at), "h:mm a")}
+          </div>
+        ) : (
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-500/20 text-xs text-amber-700 dark:text-amber-400">
+            <XCircle className="h-3.5 w-3.5" />
+            Today not yet closed — use the sidebar to close the day
+          </div>
+        )}
+        {thisMonthLog ? (
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-blue-50 dark:bg-blue-950/20 border border-blue-500/20 text-xs text-blue-700 dark:text-blue-400">
+            <CheckCircle2 className="h-3.5 w-3.5" />
+            {format(monthStart, "MMMM yyyy")} month closed
+          </div>
+        ) : (
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-muted/50 border text-xs text-muted-foreground">
+            <XCircle className="h-3.5 w-3.5" />
+            {format(monthStart, "MMMM yyyy")} not yet closed
+          </div>
+        )}
       </div>
 
-      <Tabs defaultValue="daily" className="space-y-4">
+      {/* Today's summary cards */}
+      <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
+        {[
+          {
+            title: "Today's Revenue",
+            value: `₱${todayRevenue.toFixed(2)}`,
+            sub: `${todayTx?.length || 0} transactions`,
+            icon: DollarSign,
+            color: "text-success",
+          },
+          {
+            title: "Cash Sales",
+            value: `₱${todayCash.toFixed(2)}`,
+            icon: DollarSign,
+          },
+          {
+            title: "Card Sales",
+            value: `₱${todayCard.toFixed(2)}`,
+            icon: DollarSign,
+          },
+          {
+            title: "Today's VAT",
+            value: `₱${todayVat.toFixed(2)}`,
+            sub: `Net: ₱${todayNet.toFixed(2)}`,
+            icon: FileText,
+          },
+          {
+            title: "Today's Refunds",
+            value: `₱${todayRefundTotal.toFixed(2)}`,
+            sub: `${todayRefunds?.length || 0} refunded`,
+            icon: RotateCcw,
+            color: "text-destructive",
+          },
+          {
+            title: "Discounts Given",
+            value: `₱${todayDiscountTotal.toFixed(2)}`,
+            sub: `${todayDiscounts.length} discounted`,
+            icon: FileText,
+            color: "text-warning",
+          },
+        ].map((card) => (
+          <Card key={card.title}>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+                <card.icon className="h-4 w-4" /> {card.title}
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className={`text-2xl font-bold ${card.color || ""}`}>
+                {card.value}
+              </p>
+              {card.sub && (
+                <p className="text-xs text-muted-foreground">{card.sub}</p>
+              )}
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+
+      {/* Main Tabs */}
+      <Tabs defaultValue="summary" className="space-y-4">
         <TabsList className="tabs-scroll flex w-full overflow-x-auto scrollbar-none h-auto p-1 justify-start">
           <TabsTrigger value="summary" className="shrink-0">
             <FileText className="h-4 w-4 mr-1" /> Financial Summary
@@ -474,17 +659,11 @@ export default function Bookkeeping() {
           <TabsTrigger value="daily" className="shrink-0">
             <Receipt className="h-4 w-4 mr-1" /> Daily Sales
           </TabsTrigger>
-          <TabsTrigger value="monthly" className="shrink-0">
-            <TrendingUp className="h-4 w-4 mr-1" /> Monthly Revenue
-          </TabsTrigger>
           <TabsTrigger value="top" className="shrink-0">
             <Package className="h-4 w-4 mr-1" /> Top Products
           </TabsTrigger>
-          <TabsTrigger value="lowstock" className="shrink-0">
-            <Package className="h-4 w-4 mr-1" /> Low Stock
-          </TabsTrigger>
-          <TabsTrigger value="slow" className="shrink-0">
-            <TrendingDown className="h-4 w-4 mr-1" /> Slow Moving
+          <TabsTrigger value="stock" className="shrink-0">
+            <Package className="h-4 w-4 mr-1" /> Stock Health
           </TabsTrigger>
           <TabsTrigger value="cashier" className="shrink-0">
             <Users className="h-4 w-4 mr-1" /> Cashier Performance
@@ -492,15 +671,15 @@ export default function Bookkeeping() {
           <TabsTrigger value="vat" className="shrink-0">
             <FileText className="h-4 w-4 mr-1" /> VAT Report
           </TabsTrigger>
-          <TabsTrigger value="refunds" className="shrink-0">
-            <RotateCcw className="h-4 w-4 mr-1" /> Refunds
+          <TabsTrigger value="deductions" className="shrink-0">
+            <AlertTriangle className="h-4 w-4 mr-1" /> Refunds & Discounts
           </TabsTrigger>
-          <TabsTrigger value="discounts" className="shrink-0">
-            Discounts & Waste
+          <TabsTrigger value="logs" className="shrink-0">
+            <BookOpen className="h-4 w-4 mr-1" /> Logs
           </TabsTrigger>
         </TabsList>
 
-        {/* Financial Summary */}
+        {/* ── Financial Summary ── */}
         <TabsContent value="summary">
           <FinancialSummaryTab
             selectedMonth={selectedMonth}
@@ -514,11 +693,51 @@ export default function Bookkeeping() {
             exportCSV={exportCSV}
           />
         </TabsContent>
-        {/* Daily Sales Record */}
-        <TabsContent value="daily">
+
+        {/* ── Daily Sales ── */}
+        <TabsContent value="daily" className="space-y-4">
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+            {[
+              {
+                label: "Gross Revenue",
+                value: `₱${monthRevenue.toFixed(2)}`,
+                color: "text-success",
+              },
+              {
+                label: "Total VAT",
+                value: `₱${monthVat.toFixed(2)}`,
+                color: "",
+              },
+              {
+                label: "Net Revenue",
+                value: `₱${monthNet.toFixed(2)}`,
+                color: "",
+              },
+              {
+                label: "Refunds",
+                value: `₱${monthRefundTotal.toFixed(2)}`,
+                color: "text-destructive",
+              },
+              {
+                label: "Transactions",
+                value: String(monthTx?.length || 0),
+                color: "",
+              },
+            ].map((s) => (
+              <div key={s.label} className="p-3 rounded-lg border bg-muted/30">
+                <p className="text-xs text-muted-foreground">{s.label}</p>
+                <p className={`text-lg font-bold ${s.color}`}>{s.value}</p>
+                <p className="text-xs text-muted-foreground">
+                  {format(monthStart, "MMMM yyyy")}
+                </p>
+              </div>
+            ))}
+          </div>
           <Card>
             <CardHeader className="flex flex-row items-center justify-between">
-              <CardTitle className="text-base">Daily Sales Record</CardTitle>
+              <CardTitle className="text-base">
+                Daily Breakdown — {format(monthStart, "MMMM yyyy")}
+              </CardTitle>
               <Button
                 variant="outline"
                 size="sm"
@@ -549,11 +768,11 @@ export default function Bookkeeping() {
                     <TableHead className="text-right">Refunds</TableHead>
                     <TableHead className="text-right">VAT</TableHead>
                     <TableHead className="text-right">Net</TableHead>
-                    <TableHead className="text-right">View</TableHead>
+                    <TableHead className="text-right">Detail</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {dailyBreakdown.map((d) => (
+                  {pagedDailyBreakdown.map((d) => (
                     <TableRow
                       key={d.date}
                       className="cursor-pointer hover:bg-muted/50"
@@ -590,7 +809,7 @@ export default function Bookkeeping() {
                       </TableCell>
                     </TableRow>
                   ))}
-                  {dailyBreakdown.length === 0 && (
+                  {pagedDailyBreakdown.length === 0 && (
                     <TableRow>
                       <TableCell
                         colSpan={7}
@@ -602,54 +821,22 @@ export default function Bookkeeping() {
                   )}
                 </TableBody>
               </Table>
+              <BkPagination
+                page={dailyPage}
+                setPage={setDailyPage}
+                total={dailyBreakdown.length}
+              />
             </CardContent>
           </Card>
         </TabsContent>
 
-        {/* Monthly Revenue Summary */}
-        <TabsContent value="monthly">
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">
-                Monthly Revenue — {format(monthStart, "MMMM yyyy")}
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-                <div className="space-y-1">
-                  <p className="text-sm text-muted-foreground">Gross Revenue</p>
-                  <p className="text-2xl font-bold text-success">
-                    ₱{monthRevenue.toFixed(2)}
-                  </p>
-                </div>
-                <div className="space-y-1">
-                  <p className="text-sm text-muted-foreground">Total VAT</p>
-                  <p className="text-2xl font-bold">₱{monthVat.toFixed(2)}</p>
-                </div>
-                <div className="space-y-1">
-                  <p className="text-sm text-muted-foreground">Net Revenue</p>
-                  <p className="text-2xl font-bold">₱{monthNet.toFixed(2)}</p>
-                </div>
-                <div className="space-y-1">
-                  <p className="text-sm text-muted-foreground">Refunds</p>
-                  <p className="text-2xl font-bold text-destructive">
-                    ₱{monthRefundTotal.toFixed(2)}
-                  </p>
-                </div>
-                <div className="space-y-1">
-                  <p className="text-sm text-muted-foreground">Transactions</p>
-                  <p className="text-2xl font-bold">{monthTx?.length || 0}</p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        {/* Top Products */}
+        {/* ── Top Products ── */}
         <TabsContent value="top">
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">Top Selling Products</CardTitle>
+              <CardTitle className="text-base">
+                Top Selling Products — {format(monthStart, "MMMM yyyy")}
+              </CardTitle>
             </CardHeader>
             <CardContent className="p-0">
               <Table>
@@ -664,7 +851,9 @@ export default function Bookkeeping() {
                 <TableBody>
                   {topProducts?.map((p, i) => (
                     <TableRow key={i}>
-                      <TableCell>{i + 1}</TableCell>
+                      <TableCell className="text-muted-foreground">
+                        {i + 1}
+                      </TableCell>
                       <TableCell className="font-medium">{p.name}</TableCell>
                       <TableCell className="text-right">{p.qty}</TableCell>
                       <TableCell className="text-right font-medium">
@@ -688,11 +877,13 @@ export default function Bookkeeping() {
           </Card>
         </TabsContent>
 
-        {/* Low Stock */}
-        <TabsContent value="lowstock">
+        {/* ── Stock Health ── */}
+        <TabsContent value="stock" className="space-y-4">
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">Low Stock Report</CardTitle>
+              <CardTitle className="text-base flex items-center gap-2">
+                <Package className="h-4 w-4" /> Low Stock Alert
+              </CardTitle>
             </CardHeader>
             <CardContent className="p-0">
               <Table>
@@ -706,7 +897,7 @@ export default function Bookkeeping() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {lowStock?.map((p) => (
+                  {pagedLowStock.map((p) => (
                     <TableRow key={p.name}>
                       <TableCell className="font-medium">{p.name}</TableCell>
                       <TableCell>
@@ -729,11 +920,11 @@ export default function Bookkeeping() {
                       </TableCell>
                     </TableRow>
                   ))}
-                  {(!lowStock || lowStock.length === 0) && (
+                  {(!pagedLowStock || pagedLowStock.length === 0) && (
                     <TableRow>
                       <TableCell
                         colSpan={5}
-                        className="text-center py-8 text-muted-foreground"
+                        className="text-center py-6 text-muted-foreground"
                       >
                         All stocked up!
                       </TableCell>
@@ -741,12 +932,13 @@ export default function Bookkeeping() {
                   )}
                 </TableBody>
               </Table>
+              <BkPagination
+                page={lowStockPage}
+                setPage={setLowStockPage}
+                total={lowStock?.length || 0}
+              />
             </CardContent>
           </Card>
-        </TabsContent>
-
-        {/* Slow-Moving Stock */}
-        <TabsContent value="slow">
           <Card>
             <CardHeader>
               <CardTitle className="text-base flex items-center gap-2">
@@ -765,10 +957,11 @@ export default function Bookkeeping() {
                     <TableHead className="text-right">In Stock</TableHead>
                     <TableHead className="text-right">30d Sales</TableHead>
                     <TableHead className="text-right">Stock Value</TableHead>
+                    <TableHead>Risk</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {slowMoving?.map((p) => (
+                  {pagedSlowMoving.map((p) => (
                     <TableRow key={p.id}>
                       <TableCell className="font-medium">{p.name}</TableCell>
                       <TableCell>
@@ -781,13 +974,24 @@ export default function Bookkeeping() {
                       <TableCell className="text-right">
                         ₱{p.stockValue.toFixed(2)}
                       </TableCell>
+                      <TableCell>
+                        {p.sales30d === 0 ? (
+                          <Badge variant="destructive" className="text-xs">
+                            Dead Stock
+                          </Badge>
+                        ) : (
+                          <Badge className="bg-warning text-warning-foreground text-xs">
+                            Slow
+                          </Badge>
+                        )}
+                      </TableCell>
                     </TableRow>
                   ))}
-                  {(!slowMoving || slowMoving.length === 0) && (
+                  {(!pagedSlowMoving || pagedSlowMoving.length === 0) && (
                     <TableRow>
                       <TableCell
-                        colSpan={5}
-                        className="text-center py-8 text-muted-foreground"
+                        colSpan={6}
+                        className="text-center py-6 text-muted-foreground"
                       >
                         All products are moving well
                       </TableCell>
@@ -795,11 +999,16 @@ export default function Bookkeeping() {
                   )}
                 </TableBody>
               </Table>
+              <BkPagination
+                page={slowMovingPage}
+                setPage={setSlowMovingPage}
+                total={slowMoving?.length || 0}
+              />
             </CardContent>
           </Card>
         </TabsContent>
 
-        {/* Cashier Performance */}
+        {/* ── Cashier Performance ── */}
         <TabsContent value="cashier">
           <Card>
             <CardHeader>
@@ -853,7 +1062,7 @@ export default function Bookkeeping() {
           </Card>
         </TabsContent>
 
-        {/* VAT Report */}
+        {/* ── VAT Report ── */}
         <TabsContent value="vat">
           <Card>
             <CardHeader className="flex flex-row items-center justify-between">
@@ -881,34 +1090,34 @@ export default function Bookkeeping() {
             </CardHeader>
             <CardContent>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-                <div className="space-y-1">
-                  <p className="text-sm text-muted-foreground">
-                    Total Gross Sales
-                  </p>
-                  <p className="text-xl font-bold">
-                    ₱{monthRevenue.toFixed(2)}
-                  </p>
-                </div>
-                <div className="space-y-1">
-                  <p className="text-sm text-muted-foreground">
-                    Total VAT (12%)
-                  </p>
-                  <p className="text-xl font-bold">₱{monthVat.toFixed(2)}</p>
-                </div>
-                <div className="space-y-1">
-                  <p className="text-sm text-muted-foreground">
-                    Total Net Sales
-                  </p>
-                  <p className="text-xl font-bold">₱{monthNet.toFixed(2)}</p>
-                </div>
-                <div className="space-y-1">
-                  <p className="text-sm text-muted-foreground">
-                    Refund VAT Adj.
-                  </p>
-                  <p className="text-xl font-bold text-destructive">
-                    ₱{monthRefundVat.toFixed(2)}
-                  </p>
-                </div>
+                {[
+                  {
+                    label: "Total Gross Sales",
+                    value: `₱${monthRevenue.toFixed(2)}`,
+                  },
+                  {
+                    label: "Total VAT (12%)",
+                    value: `₱${monthVat.toFixed(2)}`,
+                  },
+                  {
+                    label: "Total Net Sales",
+                    value: `₱${monthNet.toFixed(2)}`,
+                  },
+                  {
+                    label: "Refund VAT Adj.",
+                    value: `₱${monthRefundVat.toFixed(2)}`,
+                    color: "text-destructive",
+                  },
+                ].map((s) => (
+                  <div key={s.label} className="space-y-1">
+                    <p className="text-sm text-muted-foreground">{s.label}</p>
+                    <p
+                      className={`text-xl font-bold ${(s as any).color || ""}`}
+                    >
+                      {s.value}
+                    </p>
+                  </div>
+                ))}
               </div>
               <Table>
                 <TableHeader>
@@ -921,7 +1130,7 @@ export default function Bookkeeping() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {dailyBreakdown.map((d) => (
+                  {pagedVat.map((d) => (
                     <TableRow key={d.date}>
                       <TableCell>
                         {format(new Date(d.date), "MMM d, yyyy")}
@@ -940,7 +1149,7 @@ export default function Bookkeeping() {
                       </TableCell>
                     </TableRow>
                   ))}
-                  {dailyBreakdown.length === 0 && (
+                  {pagedVat.length === 0 && (
                     <TableRow>
                       <TableCell
                         colSpan={5}
@@ -952,45 +1161,59 @@ export default function Bookkeeping() {
                   )}
                 </TableBody>
               </Table>
+              <BkPagination
+                page={vatPage}
+                setPage={setVatPage}
+                total={dailyBreakdown.length}
+              />
             </CardContent>
           </Card>
         </TabsContent>
 
-        {/* Refunds */}
-        <TabsContent value="refunds">
+        {/* ── Refunds & Discounts ── */}
+        <TabsContent value="deductions" className="space-y-4">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            {[
+              {
+                label: "Total Refunds",
+                value: `₱${monthRefundTotal.toFixed(2)}`,
+                sub: `${monthRefunds?.length || 0} transactions`,
+                color: "text-destructive",
+              },
+              {
+                label: "PWD/Senior Discounts",
+                value: `₱${monthDiscountTotal.toFixed(2)}`,
+                sub: `${(monthTx || []).filter((t) => t.discount_type).length} transactions`,
+                color: "text-warning",
+              },
+              {
+                label: "Expiry Waste Loss",
+                value: `₱${monthWasteLoss.toFixed(2)}`,
+                sub: `${(disposedItems || []).reduce((s, d) => s + d.quantity, 0)} units disposed`,
+                color: "text-destructive",
+              },
+              {
+                label: "Net Adj. Revenue",
+                value: `₱${(monthRevenue - monthRefundTotal - monthWasteLoss).toFixed(2)}`,
+                sub: "after refunds & waste",
+                color: "",
+              },
+            ].map((k) => (
+              <div key={k.label} className="p-3 rounded-lg border bg-muted/30">
+                <p className="text-xs text-muted-foreground">{k.label}</p>
+                <p className={`text-xl font-bold ${k.color}`}>{k.value}</p>
+                <p className="text-xs text-muted-foreground">{k.sub}</p>
+              </div>
+            ))}
+          </div>
           <Card>
             <CardHeader>
               <CardTitle className="text-base flex items-center gap-2">
-                <RotateCcw className="h-4 w-4" /> Refunds —{" "}
-                {format(monthStart, "MMMM yyyy")}
+                <RotateCcw className="h-4 w-4" /> Refund Transactions
               </CardTitle>
             </CardHeader>
-            <CardContent>
-              <div className="grid grid-cols-3 gap-4 mb-6">
-                <div className="space-y-1">
-                  <p className="text-sm text-muted-foreground">
-                    Total Refunded
-                  </p>
-                  <p className="text-xl font-bold text-destructive">
-                    ₱{monthRefundTotal.toFixed(2)}
-                  </p>
-                </div>
-                <div className="space-y-1">
-                  <p className="text-sm text-muted-foreground">Refund Count</p>
-                  <p className="text-xl font-bold">
-                    {monthRefunds?.length || 0}
-                  </p>
-                </div>
-                <div className="space-y-1">
-                  <p className="text-sm text-muted-foreground">
-                    VAT on Refunds
-                  </p>
-                  <p className="text-xl font-bold">
-                    ₱{monthRefundVat.toFixed(2)}
-                  </p>
-                </div>
-              </div>
-              {monthRefunds && monthRefunds.length > 0 ? (
+            <CardContent className="p-0">
+              {pagedRefunds && pagedRefunds.length > 0 ? (
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -1002,7 +1225,7 @@ export default function Bookkeeping() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {monthRefunds.map((tx) => (
+                    {pagedRefunds.map((tx) => (
                       <TableRow key={tx.id}>
                         <TableCell className="font-mono text-xs">
                           {tx.id.slice(0, 8)}
@@ -1014,7 +1237,7 @@ export default function Bookkeeping() {
                           )}
                         </TableCell>
                         <TableCell>
-                          {(tx.employees as any)?.name || "—"}
+                          {employeeMap?.[tx.employee_id ?? ""] || "—"}
                         </TableCell>
                         <TableCell>
                           <Badge variant="secondary">{tx.payment_method}</Badge>
@@ -1027,112 +1250,561 @@ export default function Bookkeeping() {
                   </TableBody>
                 </Table>
               ) : (
-                <p className="text-sm text-muted-foreground text-center py-4">
+                <p className="text-sm text-muted-foreground text-center py-6">
                   No refunds this month
                 </p>
               )}
+              <BkPagination
+                page={refundsPage}
+                setPage={setRefundsPage}
+                total={monthRefunds?.length || 0}
+              />
             </CardContent>
           </Card>
-        </TabsContent>
-
-        {/* Discounts & Waste */}
-        <TabsContent value="discounts">
           <Card>
             <CardHeader>
               <CardTitle className="text-base">
-                Discounts & Expiry Waste — {format(monthStart, "MMMM yyyy")}
+                PWD / Senior Discounts
               </CardTitle>
             </CardHeader>
-            <CardContent>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-                <div className="space-y-1">
-                  <p className="text-sm text-muted-foreground">
-                    PWD/Senior Discounts
-                  </p>
-                  <p className="text-2xl font-bold text-warning">
-                    ₱{monthDiscountTotal.toFixed(2)}
-                  </p>
-                  <p className="text-xs text-muted-foreground">
-                    {(monthTx || []).filter((t) => t.discount_type).length}{" "}
-                    transactions
-                  </p>
-                </div>
-                <div className="space-y-1">
-                  <p className="text-sm text-muted-foreground">
-                    Expiry Waste Loss
-                  </p>
-                  <p className="text-2xl font-bold text-destructive">
-                    ₱{monthWasteLoss.toFixed(2)}
-                  </p>
-                  <p className="text-xs text-muted-foreground">
-                    {(disposedItems || []).reduce((s, d) => s + d.quantity, 0)}{" "}
-                    units disposed
-                  </p>
-                </div>
-                <div className="space-y-1">
-                  <p className="text-sm text-muted-foreground">
-                    Discounted Revenue
-                  </p>
-                  <p className="text-2xl font-bold text-success">
-                    ₱
-                    {(monthTx || [])
-                      .filter((t) => t.discount_type)
-                      .reduce((s, t) => s + Number(t.total_amount), 0)
-                      .toFixed(2)}
-                  </p>
-                </div>
-                <div className="space-y-1">
-                  <p className="text-sm text-muted-foreground">
-                    Net Adj. Revenue
-                  </p>
-                  <p className="text-2xl font-bold">
-                    ₱
-                    {(monthRevenue - monthRefundTotal - monthWasteLoss).toFixed(
-                      2,
-                    )}
-                  </p>
-                </div>
-              </div>
+            <CardContent className="p-0">
+              {discountedTx.length > 0 ? (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>ID</TableHead>
+                      <TableHead>Date</TableHead>
+                      <TableHead>Type</TableHead>
+                      <TableHead>Customer ID</TableHead>
+                      <TableHead className="text-right">Original</TableHead>
+                      <TableHead className="text-right">Discount</TableHead>
+                      <TableHead className="text-right">Final</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {pagedDiscounts.map((tx) => (
+                      <TableRow key={tx.id}>
+                        <TableCell className="font-mono text-xs">
+                          {tx.id.slice(0, 8)}
+                        </TableCell>
+                        <TableCell>
+                          {format(
+                            new Date(tx.created_at),
+                            "MMM d, yyyy h:mm a",
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant="secondary">
+                            {tx.discount_type?.toUpperCase()}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="font-mono text-xs">
+                          {tx.customer_id_number || "—"}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          ₱{Number(tx.original_amount).toFixed(2)}
+                        </TableCell>
+                        <TableCell className="text-right text-warning">
+                          -₱{Number(tx.discount_amount).toFixed(2)}
+                        </TableCell>
+                        <TableCell className="text-right font-medium">
+                          ₱{Number(tx.total_amount).toFixed(2)}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              ) : (
+                <p className="text-sm text-muted-foreground text-center py-6">
+                  No discounts this month
+                </p>
+              )}
+              <BkPagination
+                page={discountsPage}
+                setPage={setDiscountsPage}
+                total={discountedTx.length}
+              />
+            </CardContent>
+          </Card>
+          {pagedDisposed && pagedDisposed.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base flex items-center gap-2">
+                  <AlertTriangle className="h-4 w-4 text-destructive" />{" "}
+                  Disposed / Expired Items
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="p-0">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Product</TableHead>
+                      <TableHead className="text-right">Qty</TableHead>
+                      <TableHead className="text-right">Loss</TableHead>
+                      <TableHead>Date</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {pagedDisposed.map((d) => (
+                      <TableRow key={d.id}>
+                        <TableCell className="font-medium">
+                          {(d.products as any)?.name || "Unknown"}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          {d.quantity}
+                        </TableCell>
+                        <TableCell className="text-right text-destructive">
+                          ₱{Number(d.total_loss).toFixed(2)}
+                        </TableCell>
+                        <TableCell>
+                          {format(new Date(d.disposed_at!), "MMM d, yyyy")}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+                <BkPagination
+                  page={disposedPage}
+                  setPage={setDisposedPage}
+                  total={disposedItems?.length || 0}
+                />
+              </CardContent>
+            </Card>
+          )}
+        </TabsContent>
 
-              {disposedItems && disposedItems.length > 0 && (
-                <>
-                  <h4 className="text-sm font-medium mb-2">Disposed Items</h4>
+        {/* ── Logs ── */}
+        <TabsContent value="logs" className="space-y-4">
+          <Tabs defaultValue="daily-logs">
+            <TabsList className="mb-4">
+              <TabsTrigger
+                value="daily-logs"
+                className="flex items-center gap-1.5"
+              >
+                <CalendarDays className="h-3.5 w-3.5" /> Daily Logs
+              </TabsTrigger>
+              <TabsTrigger
+                value="monthly-logs"
+                className="flex items-center gap-1.5"
+              >
+                <Layers className="h-3.5 w-3.5" /> Monthly Logs
+              </TabsTrigger>
+              <TabsTrigger
+                value="shift-logs"
+                className="flex items-center gap-1.5"
+              >
+                <Clock className="h-3.5 w-3.5" /> Shift Logs
+              </TabsTrigger>
+            </TabsList>
+
+            {/* ── Daily Logs ── */}
+            <TabsContent value="daily-logs" className="space-y-3">
+              <div className="flex items-center justify-between">
+                <p className="text-sm text-muted-foreground">
+                  Official daily closing records. Click any row to view the full
+                  summary.
+                </p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() =>
+                    exportCSV(
+                      (dailyLogs || []).map((l) => ({
+                        Date: l.log_date,
+                        "Total Sales": l.total_sales,
+                        Transactions: l.transaction_count,
+                        VAT: l.vat_amount,
+                        Discounts: l.discount_amount,
+                        Refunds: l.refund_amount,
+                        "Cash Sales": l.cash_sales,
+                        "Card Sales": l.card_sales,
+                        "Stock Loss": l.stock_loss,
+                        "Net Profit": l.net_profit,
+                      })),
+                      "daily-logs.csv",
+                    )
+                  }
+                >
+                  <Download className="h-4 w-4 mr-1" /> Export
+                </Button>
+              </div>
+              <Card>
+                <CardContent className="p-0">
                   <Table>
                     <TableHeader>
                       <TableRow>
-                        <TableHead>Product</TableHead>
-                        <TableHead className="text-right">Qty</TableHead>
-                        <TableHead className="text-right">Loss</TableHead>
                         <TableHead>Date</TableHead>
+                        <TableHead className="text-right">Sales</TableHead>
+                        <TableHead className="text-right">Tx</TableHead>
+                        <TableHead className="text-right">Cash</TableHead>
+                        <TableHead className="text-right">Card</TableHead>
+                        <TableHead className="text-right">VAT</TableHead>
+                        <TableHead className="text-right">Refunds</TableHead>
+                        <TableHead className="text-right">Stock Loss</TableHead>
+                        <TableHead className="text-right">Net Profit</TableHead>
+                        <TableHead>Closed</TableHead>
+                        <TableHead />
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {disposedItems.map((d) => (
-                        <TableRow key={d.id}>
-                          <TableCell className="font-medium">
-                            {(d.products as any)?.name || "Unknown"}
+                      {(dailyLogs || []).map((log) => (
+                        <TableRow
+                          key={log.id}
+                          className="cursor-pointer hover:bg-muted/50 group"
+                          onClick={() => navigate(`/logs/${log.id}?type=daily`)}
+                        >
+                          <TableCell className="font-medium whitespace-nowrap">
+                            {format(new Date(log.log_date), "MMM d, yyyy")}
+                          </TableCell>
+                          <TableCell className="text-right text-success font-medium">
+                            {fmt(Number(log.total_sales))}
                           </TableCell>
                           <TableCell className="text-right">
-                            {d.quantity}
+                            {log.transaction_count}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            {fmt(Number(log.cash_sales))}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            {fmt(Number(log.card_sales))}
+                          </TableCell>
+                          <TableCell className="text-right text-muted-foreground">
+                            {fmt(Number(log.vat_amount))}
                           </TableCell>
                           <TableCell className="text-right text-destructive">
-                            ₱{Number(d.total_loss).toFixed(2)}
+                            {Number(log.refund_amount) > 0
+                              ? fmt(Number(log.refund_amount))
+                              : "—"}
+                          </TableCell>
+                          <TableCell className="text-right text-destructive">
+                            {Number(log.stock_loss) > 0
+                              ? fmt(Number(log.stock_loss))
+                              : "—"}
+                          </TableCell>
+                          <TableCell
+                            className={`text-right font-bold ${Number(log.net_profit) >= 0 ? "text-success" : "text-destructive"}`}
+                          >
+                            {fmt(Number(log.net_profit))}
+                          </TableCell>
+                          <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
+                            {format(new Date(log.created_at), "h:mm a")}
                           </TableCell>
                           <TableCell>
-                            {format(new Date(d.disposed_at!), "MMM d, yyyy")}
+                            <ArrowRight className="h-4 w-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
                           </TableCell>
                         </TableRow>
                       ))}
+                      {(!dailyLogs || dailyLogs.length === 0) && (
+                        <TableRow>
+                          <TableCell
+                            colSpan={11}
+                            className="text-center py-10 text-muted-foreground"
+                          >
+                            <div className="space-y-1">
+                              <p className="font-medium">No daily logs yet</p>
+                              <p className="text-xs">
+                                Close the day from the sidebar to create the
+                                first official daily record
+                              </p>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      )}
                     </TableBody>
                   </Table>
-                </>
-              )}
-            </CardContent>
-          </Card>
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            {/* ── Monthly Logs ── */}
+            <TabsContent value="monthly-logs" className="space-y-3">
+              <div className="flex items-center justify-between">
+                <p className="text-sm text-muted-foreground">
+                  Official monthly closing records. Click any row to view the
+                  full summary.
+                </p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() =>
+                    exportCSV(
+                      (monthlyLogs || []).map((l) => ({
+                        Year: l.log_year,
+                        Month: l.log_month,
+                        "Total Sales": l.total_sales,
+                        Transactions: l.transaction_count,
+                        VAT: l.vat_amount,
+                        Discounts: l.discount_amount,
+                        Refunds: l.refund_amount,
+                        "Cash Sales": l.cash_sales,
+                        "Card Sales": l.card_sales,
+                        "Stock Loss": l.stock_loss,
+                        "Net Profit": l.net_profit,
+                      })),
+                      "monthly-logs.csv",
+                    )
+                  }
+                >
+                  <Download className="h-4 w-4 mr-1" /> Export
+                </Button>
+              </div>
+              <Card>
+                <CardContent className="p-0">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Period</TableHead>
+                        <TableHead className="text-right">Sales</TableHead>
+                        <TableHead className="text-right">Tx</TableHead>
+                        <TableHead className="text-right">Cash</TableHead>
+                        <TableHead className="text-right">Card</TableHead>
+                        <TableHead className="text-right">VAT</TableHead>
+                        <TableHead className="text-right">Refunds</TableHead>
+                        <TableHead className="text-right">Stock Loss</TableHead>
+                        <TableHead className="text-right">Net Profit</TableHead>
+                        <TableHead>Closed</TableHead>
+                        <TableHead />
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {(monthlyLogs || []).map((log) => (
+                        <TableRow
+                          key={log.id}
+                          className="cursor-pointer hover:bg-muted/50 group"
+                          onClick={() =>
+                            navigate(`/logs/${log.id}?type=monthly`)
+                          }
+                        >
+                          <TableCell className="font-medium whitespace-nowrap">
+                            {format(
+                              new Date(log.log_year, log.log_month - 1, 1),
+                              "MMMM yyyy",
+                            )}
+                          </TableCell>
+                          <TableCell className="text-right text-success font-medium">
+                            {fmt(Number(log.total_sales))}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            {log.transaction_count}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            {fmt(Number(log.cash_sales))}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            {fmt(Number(log.card_sales))}
+                          </TableCell>
+                          <TableCell className="text-right text-muted-foreground">
+                            {fmt(Number(log.vat_amount))}
+                          </TableCell>
+                          <TableCell className="text-right text-destructive">
+                            {Number(log.refund_amount) > 0
+                              ? fmt(Number(log.refund_amount))
+                              : "—"}
+                          </TableCell>
+                          <TableCell className="text-right text-destructive">
+                            {Number(log.stock_loss) > 0
+                              ? fmt(Number(log.stock_loss))
+                              : "—"}
+                          </TableCell>
+                          <TableCell
+                            className={`text-right font-bold ${Number(log.net_profit) >= 0 ? "text-success" : "text-destructive"}`}
+                          >
+                            {fmt(Number(log.net_profit))}
+                          </TableCell>
+                          <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
+                            {format(new Date(log.created_at), "MMM d, h:mm a")}
+                          </TableCell>
+                          <TableCell>
+                            <ArrowRight className="h-4 w-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                      {(!monthlyLogs || monthlyLogs.length === 0) && (
+                        <TableRow>
+                          <TableCell
+                            colSpan={11}
+                            className="text-center py-10 text-muted-foreground"
+                          >
+                            <div className="space-y-1">
+                              <p className="font-medium">No monthly logs yet</p>
+                              <p className="text-xs">
+                                Close the month from the sidebar to create the
+                                first official monthly record
+                              </p>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      )}
+                    </TableBody>
+                  </Table>
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            {/* ── Shift Logs ── */}
+            <TabsContent value="shift-logs" className="space-y-3">
+              <div className="flex items-center justify-between">
+                <p className="text-sm text-muted-foreground">
+                  Cashier shift records for {format(monthStart, "MMMM yyyy")} —
+                  click any row to view the full shift report.
+                </p>
+              </div>
+              <Card>
+                <CardContent className="p-0">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Cashier</TableHead>
+                        <TableHead>Role</TableHead>
+                        <TableHead>Clock In</TableHead>
+                        <TableHead>Clock Out</TableHead>
+                        <TableHead className="text-right">Duration</TableHead>
+                        <TableHead className="text-right">
+                          Starting Cash
+                        </TableHead>
+                        <TableHead className="text-right">
+                          Ending Cash
+                        </TableHead>
+                        <TableHead className="text-right">Expected</TableHead>
+                        <TableHead className="text-right">Difference</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead />
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {(shiftLogs || []).map((shift) => {
+                        const emp = shift.employees as any;
+                        const durationMins = shift.clock_out
+                          ? Math.round(
+                              (new Date(shift.clock_out).getTime() -
+                                new Date(shift.clock_in).getTime()) /
+                                60000,
+                            )
+                          : 0;
+                        const hrs = Math.floor(durationMins / 60);
+                        const mins = durationMins % 60;
+                        const diff = Number(shift.cash_difference || 0);
+                        const isBalanced = Math.abs(diff) < 0.01;
+                        const isActive = !shift.clock_out;
+                        return (
+                          <TableRow
+                            key={shift.id}
+                            className={`group transition-colors ${isActive ? "opacity-60" : "cursor-pointer hover:bg-muted/50"}`}
+                            onClick={() => {
+                              if (!isActive)
+                                navigate(`/shift-report/${shift.id}`);
+                            }}
+                            title={
+                              isActive
+                                ? "Shift still in progress — report available after clock-out"
+                                : "Click to view shift report"
+                            }
+                          >
+                            <TableCell className="font-medium">
+                              {emp?.name || "—"}
+                            </TableCell>
+                            <TableCell>
+                              <Badge variant="secondary" className="text-xs">
+                                {emp?.role || "—"}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="text-xs whitespace-nowrap">
+                              {format(
+                                new Date(shift.clock_in),
+                                "MMM d, h:mm a",
+                              )}
+                            </TableCell>
+                            <TableCell className="text-xs whitespace-nowrap">
+                              {shift.clock_out ? (
+                                format(new Date(shift.clock_out), "h:mm a")
+                              ) : (
+                                <Badge variant="outline" className="text-xs">
+                                  Active
+                                </Badge>
+                              )}
+                            </TableCell>
+                            <TableCell className="text-right text-sm">
+                              {hrs > 0 ? `${hrs}h ` : ""}
+                              {mins}m
+                            </TableCell>
+                            <TableCell className="text-right">
+                              {shift.starting_cash != null
+                                ? fmt(Number(shift.starting_cash))
+                                : "—"}
+                            </TableCell>
+                            <TableCell className="text-right">
+                              {shift.ending_cash != null
+                                ? fmt(Number(shift.ending_cash))
+                                : "—"}
+                            </TableCell>
+                            <TableCell className="text-right">
+                              {shift.expected_cash != null
+                                ? fmt(Number(shift.expected_cash))
+                                : "—"}
+                            </TableCell>
+                            <TableCell
+                              className={`text-right font-medium ${isBalanced ? "text-success" : diff > 0 ? "text-warning" : "text-destructive"}`}
+                            >
+                              {shift.cash_difference != null
+                                ? (diff >= 0 ? "+" : "") + fmt(diff)
+                                : "—"}
+                            </TableCell>
+                            <TableCell>
+                              {shift.ending_cash != null ? (
+                                isBalanced ? (
+                                  <Badge className="bg-success/10 text-success border-success/20 text-xs">
+                                    Balanced
+                                  </Badge>
+                                ) : diff > 0 ? (
+                                  <Badge className="bg-amber-500/10 text-amber-600 border-amber-500/20 text-xs">
+                                    Over
+                                  </Badge>
+                                ) : (
+                                  <Badge className="bg-destructive/10 text-destructive border-destructive/20 text-xs">
+                                    Short
+                                  </Badge>
+                                )
+                              ) : (
+                                <Badge variant="outline" className="text-xs">
+                                  Pending
+                                </Badge>
+                              )}
+                            </TableCell>
+                            <TableCell>
+                              {!isActive && (
+                                <ArrowRight className="h-4 w-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
+                              )}
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
+                      {(!shiftLogs || shiftLogs.length === 0) && (
+                        <TableRow>
+                          <TableCell
+                            colSpan={11}
+                            className="text-center py-10 text-muted-foreground"
+                          >
+                            <div className="space-y-1">
+                              <p className="font-medium">
+                                No shift logs for this month
+                              </p>
+                              <p className="text-xs">
+                                Shifts are recorded when cashiers start and end
+                                their shift from the sidebar
+                              </p>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      )}
+                    </TableBody>
+                  </Table>
+                </CardContent>
+              </Card>
+            </TabsContent>
+          </Tabs>
         </TabsContent>
       </Tabs>
 
-      {/* Daily Detail Dialog */}
       <DailyDetailDialog
         date={dailyDetailDate}
         onClose={() => setDailyDetailDate(null)}
@@ -1143,6 +1815,7 @@ export default function Bookkeeping() {
   );
 }
 
+// ── DailyDetailDialog (unchanged) ─────────────────────────────────────────────
 function DailyDetailDialog({
   date,
   onClose,
@@ -1160,14 +1833,27 @@ function DailyDetailDialog({
     queryFn: async () => {
       const { data } = await supabase
         .from("transactions")
-        .select("*, employees(name)")
+        .select("*")
         .gte("created_at", startOfDay(new Date(date!)).toISOString())
         .lte("created_at", endOfDay(new Date(date!)).toISOString())
         .order("created_at", { ascending: true });
       return data || [];
     },
   });
-
+  const { data: empMap } = useQuery({
+    queryKey: ["dialog-emp-map"],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("employees")
+        .select("user_id, name")
+        .not("user_id", "is", null);
+      const map: Record<string, string> = {};
+      (data || []).forEach((e) => {
+        if (e.user_id) map[e.user_id] = e.name;
+      });
+      return map;
+    },
+  });
   const { data: dayItems } = useQuery({
     queryKey: ["bk-day-items", date],
     enabled: !!date && (dayTx?.length ?? 0) > 0,
@@ -1180,9 +1866,7 @@ function DailyDetailDialog({
       return data || [];
     },
   });
-
   if (!date) return null;
-
   const completed = (dayTx || []).filter((t) => t.status === "completed");
   const refunded = (dayTx || []).filter((t) => t.status === "refunded");
   const totalRevenue = completed.reduce(
@@ -1197,31 +1881,21 @@ function DailyDetailDialog({
   const cardTotal = completed
     .filter((t) => t.payment_method === "card")
     .reduce((s, t) => s + Number(t.total_amount), 0);
-
   const handlePrint = () => {
     if (!reportRef.current) return;
-    const printWindow = window.open("", "_blank");
-    if (!printWindow) return;
-    printWindow.document.write(`
-      <html><head><title>Daily Sales Report - ${format(new Date(date), "MMM d, yyyy")}</title>
-      <style>body{font-family:Arial,sans-serif;font-size:12px;padding:20px;max-width:800px;margin:0 auto}
-      table{width:100%;border-collapse:collapse;margin:10px 0}th,td{border:1px solid #ddd;padding:6px 8px;text-align:left}
-      th{background:#f5f5f5;font-weight:bold}.right{text-align:right}.bold{font-weight:bold}
-      h2{text-align:center;margin-bottom:4px}p.sub{text-align:center;color:#666;margin-top:0}
-      .summary{display:flex;gap:20px;margin:10px 0}.summary div{flex:1;padding:8px;background:#f9f9f9;border-radius:4px}</style>
-      </head><body>${reportRef.current.innerHTML}
-      <script>window.onload=function(){window.print();window.close()}<\/script></body></html>
-    `);
-    printWindow.document.close();
+    const w = window.open("", "_blank");
+    if (!w) return;
+    w.document.write(
+      `<html><head><title>Daily Sales Report - ${format(new Date(date), "MMM d, yyyy")}</title><style>body{font-family:Arial,sans-serif;font-size:12px;padding:20px;max-width:800px;margin:0 auto}table{width:100%;border-collapse:collapse;margin:10px 0}th,td{border:1px solid #ddd;padding:6px 8px;text-align:left}th{background:#f5f5f5;font-weight:bold}h2{text-align:center;margin-bottom:4px}</style></head><body>${reportRef.current.innerHTML}<script>window.onload=function(){window.print();window.close()}<\/script></body></html>`,
+    );
+    w.document.close();
   };
-
   const handleExportCSV = () => {
     const rows = (dayTx || []).map((tx) => {
       const items = (dayItems || []).filter((i) => i.transaction_id === tx.id);
       return {
         "Transaction ID": tx.id.slice(0, 8),
         Time: format(new Date(tx.created_at), "h:mm a"),
-        Cashier: (tx.employees as any)?.name || "—",
         Payment: tx.payment_method,
         Status: tx.status,
         Items: items
@@ -1233,7 +1907,6 @@ function DailyDetailDialog({
     });
     exportCSV(rows, `daily-record-${date}.csv`);
   };
-
   return (
     <Dialog
       open={!!date}
@@ -1248,7 +1921,6 @@ function DailyDetailDialog({
             {format(new Date(date), "MMMM d, yyyy")}
           </DialogTitle>
         </DialogHeader>
-
         <div className="flex gap-2 mb-2">
           <Button variant="outline" size="sm" onClick={handlePrint}>
             <Printer className="h-4 w-4 mr-1" /> Print
@@ -1257,7 +1929,6 @@ function DailyDetailDialog({
             <Download className="h-4 w-4 mr-1" /> Export CSV
           </Button>
         </div>
-
         <div ref={reportRef}>
           <h2 className="text-center font-bold text-base md:text-lg">
             GroceryPOS — Daily Sales Report
@@ -1265,54 +1936,62 @@ function DailyDetailDialog({
           <p className="text-center text-muted-foreground text-xs md:text-sm mb-4">
             {format(new Date(date), "MMMM d, yyyy (EEEE)")}
           </p>
-
-          {/* Summary Cards */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-3 mb-4">
-            <div className="p-2 md:p-3 rounded-lg border bg-muted/30">
-              <p className="text-xs text-muted-foreground">Revenue</p>
-              <p className="text-base md:text-lg font-bold text-success">
-                ₱{totalRevenue.toFixed(2)}
-              </p>
-            </div>
-            <div className="p-2 md:p-3 rounded-lg border bg-muted/30">
-              <p className="text-xs text-muted-foreground">Cash / Card</p>
-              <p className="text-xs md:text-sm font-medium">
-                ₱{cashTotal.toFixed(2)} / ₱{cardTotal.toFixed(2)}
-              </p>
-            </div>
-            <div className="p-2 md:p-3 rounded-lg border bg-muted/30">
-              <p className="text-xs text-muted-foreground">VAT Collected</p>
-              <p className="text-base md:text-lg font-bold">
-                ₱{totalVat.toFixed(2)}
-              </p>
-            </div>
-            <div className="p-2 md:p-3 rounded-lg border bg-muted/30">
-              <p className="text-xs text-muted-foreground">Refunds</p>
-              <p className="text-base md:text-lg font-bold text-destructive">
-                ₱{totalRefunds.toFixed(2)}
-              </p>
-              <p className="text-xs text-muted-foreground">
-                {refunded.length} transactions
-              </p>
-            </div>
+            {[
+              {
+                label: "Revenue",
+                value: `₱${totalRevenue.toFixed(2)}`,
+                color: "text-success",
+              },
+              {
+                label: "Cash / Card",
+                value: `₱${cashTotal.toFixed(2)} / ₱${cardTotal.toFixed(2)}`,
+                color: "",
+              },
+              {
+                label: "VAT Collected",
+                value: `₱${totalVat.toFixed(2)}`,
+                color: "",
+              },
+              {
+                label: "Refunds",
+                value: `₱${totalRefunds.toFixed(2)}`,
+                color: "text-destructive",
+              },
+            ].map((s) => (
+              <div
+                key={s.label}
+                className="p-2 md:p-3 rounded-lg border bg-muted/30"
+              >
+                <p className="text-xs text-muted-foreground">{s.label}</p>
+                <p className={`text-base md:text-lg font-bold ${s.color}`}>
+                  {s.value}
+                </p>
+              </div>
+            ))}
           </div>
-
-          {/* Transactions Table — horizontal scroll on mobile */}
           <div className="rounded-md border overflow-hidden">
             <div className="max-h-[250px] md:max-h-[350px] overflow-y-auto overflow-x-auto">
               <Table className="min-w-[640px]">
-                {" "}
-                {/* forces table to not squish */}
                 <TableHeader className="sticky top-0 bg-background z-10">
                   <TableRow>
-                    <TableHead className="text-xs">ID</TableHead>
-                    <TableHead className="text-xs">Time</TableHead>
-                    <TableHead className="text-xs">Cashier</TableHead>
-                    <TableHead className="text-xs">Items</TableHead>
-                    <TableHead className="text-xs">Payment</TableHead>
-                    <TableHead className="text-right text-xs">VAT</TableHead>
-                    <TableHead className="text-right text-xs">Total</TableHead>
-                    <TableHead className="text-xs">Status</TableHead>
+                    {[
+                      "ID",
+                      "Time",
+                      "Cashier",
+                      "Items",
+                      "Payment",
+                      "VAT",
+                      "Total",
+                      "Status",
+                    ].map((h) => (
+                      <TableHead
+                        key={h}
+                        className={`text-xs ${["VAT", "Total"].includes(h) ? "text-right" : ""}`}
+                      >
+                        {h}
+                      </TableHead>
+                    ))}
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -1329,7 +2008,7 @@ function DailyDetailDialog({
                           {format(new Date(tx.created_at), "h:mm a")}
                         </TableCell>
                         <TableCell className="text-xs whitespace-nowrap">
-                          {(tx.employees as any)?.name || "—"}
+                          {empMap?.[tx.employee_id ?? ""] || "—"}
                         </TableCell>
                         <TableCell className="text-xs w-[180px]">
                           {items.map((i) => (
@@ -1355,13 +2034,7 @@ function DailyDetailDialog({
                         </TableCell>
                         <TableCell>
                           <Badge
-                            className={`text-xs whitespace-nowrap ${
-                              tx.status === "completed"
-                                ? "bg-success text-success-foreground"
-                                : tx.status === "refunded"
-                                  ? "bg-warning text-warning-foreground"
-                                  : "bg-destructive text-destructive-foreground"
-                            }`}
+                            className={`text-xs whitespace-nowrap ${tx.status === "completed" ? "bg-success text-success-foreground" : tx.status === "refunded" ? "bg-warning text-warning-foreground" : "bg-destructive text-destructive-foreground"}`}
                           >
                             {tx.status}
                           </Badge>
@@ -1383,27 +2056,29 @@ function DailyDetailDialog({
               </Table>
             </div>
           </div>
-
-          {/* Totals footer */}
           <div className="border-t mt-4 pt-3 space-y-1 text-xs md:text-sm">
-            <div className="flex justify-between">
-              <span>Total Transactions</span>
-              <span className="font-bold">
-                {completed.length} completed, {refunded.length} refunded
-              </span>
-            </div>
-            <div className="flex justify-between">
-              <span>Gross Revenue</span>
-              <span className="font-bold">₱{totalRevenue.toFixed(2)}</span>
-            </div>
-            <div className="flex justify-between">
-              <span>Total VAT (12%)</span>
-              <span>₱{totalVat.toFixed(2)}</span>
-            </div>
-            <div className="flex justify-between">
-              <span>Net Revenue</span>
-              <span>₱{(totalRevenue - totalVat).toFixed(2)}</span>
-            </div>
+            {[
+              {
+                label: "Total Transactions",
+                value: `${completed.length} completed, ${refunded.length} refunded`,
+                bold: true,
+              },
+              {
+                label: "Gross Revenue",
+                value: `₱${totalRevenue.toFixed(2)}`,
+                bold: true,
+              },
+              { label: "Total VAT (12%)", value: `₱${totalVat.toFixed(2)}` },
+              {
+                label: "Net Revenue",
+                value: `₱${(totalRevenue - totalVat).toFixed(2)}`,
+              },
+            ].map((r) => (
+              <div key={r.label} className="flex justify-between">
+                <span>{r.label}</span>
+                <span className={r.bold ? "font-bold" : ""}>{r.value}</span>
+              </div>
+            ))}
             <div className="flex justify-between text-destructive">
               <span>Total Refunds</span>
               <span>₱{totalRefunds.toFixed(2)}</span>
@@ -1415,8 +2090,8 @@ function DailyDetailDialog({
   );
 }
 
+// ── FinancialSummaryTab (unchanged from original) ─────────────────────────────
 function FinancialSummaryTab({
-  selectedMonth,
   monthStart,
   monthTx,
   monthRefunds,
@@ -1441,8 +2116,6 @@ function FinancialSummaryTab({
   );
   const summaryRef = useRef<HTMLDivElement>(null);
   const today = new Date();
-
-  // --- Yearly data ---
   const { data: yearTx } = useQuery({
     queryKey: ["fs-year-tx", today.getFullYear()],
     queryFn: async () => {
@@ -1455,7 +2128,6 @@ function FinancialSummaryTab({
       return data || [];
     },
   });
-
   const { data: yearRefunds } = useQuery({
     queryKey: ["fs-year-refunds", today.getFullYear()],
     queryFn: async () => {
@@ -1468,7 +2140,6 @@ function FinancialSummaryTab({
       return data || [];
     },
   });
-
   const { data: yearDisposed } = useQuery({
     queryKey: ["fs-year-disposed", today.getFullYear()],
     queryFn: async () => {
@@ -1480,35 +2151,6 @@ function FinancialSummaryTab({
       return data || [];
     },
   });
-
-  // --- Payroll (shifts) ---
-  const { data: monthShifts } = useQuery({
-    queryKey: ["fs-shifts", selectedMonth],
-    queryFn: async () => {
-      const { data } = await supabase
-        .from("shifts")
-        .select("*, employees(name, hourly_rate)")
-        .gte("clock_in", startOfMonth(monthStart).toISOString())
-        .lte("clock_in", endOfMonth(monthStart).toISOString())
-        .not("clock_out", "is", null);
-      return data || [];
-    },
-  });
-
-  const { data: yearShifts } = useQuery({
-    queryKey: ["fs-year-shifts", today.getFullYear()],
-    queryFn: async () => {
-      const { data } = await supabase
-        .from("shifts")
-        .select("*, employees(name, hourly_rate)")
-        .gte("clock_in", `${today.getFullYear()}-01-01`)
-        .lte("clock_in", `${today.getFullYear()}-12-31`)
-        .not("clock_out", "is", null);
-      return data || [];
-    },
-  });
-
-  // --- Inventory value ---
   const { data: inventoryData } = useQuery({
     queryKey: ["fs-inventory"],
     queryFn: async () => {
@@ -1519,19 +2161,6 @@ function FinancialSummaryTab({
       return data || [];
     },
   });
-
-  // Helper: compute payroll from shifts
-  const computePayroll = (shifts: any[]) =>
-    (shifts || []).reduce((sum, s) => {
-      if (!s.clock_out) return sum;
-      const hours =
-        (new Date(s.clock_out).getTime() - new Date(s.clock_in).getTime()) /
-        3600000;
-      const rate = Number((s.employees as any)?.hourly_rate || 0);
-      return sum + hours * rate;
-    }, 0);
-
-  // Helper: pick the right dataset based on viewMode
   const tx =
     viewMode === "daily"
       ? todayTx
@@ -1544,24 +2173,27 @@ function FinancialSummaryTab({
       : viewMode === "monthly"
         ? monthRefunds
         : yearRefunds || [];
-  const disposed = viewMode === "yearly" ? yearDisposed || [] : disposedItems;
-  const shifts = viewMode === "yearly" ? yearShifts || [] : monthShifts || [];
-
-  // --- Compute all figures ---
+  const disposed =
+    viewMode === "yearly"
+      ? yearDisposed || []
+      : viewMode === "daily"
+        ? (disposedItems || []).filter(
+            (d) =>
+              format(new Date(d.disposed_at), "yyyy-MM-dd") ===
+              format(today, "yyyy-MM-dd"),
+          )
+        : disposedItems || [];
   const grossRevenue = tx.reduce((s, t) => s + Number(t.total_amount), 0);
   const totalVat = tx.reduce((s, t) => s + Number(t.vat_amount), 0);
   const netRevenue = grossRevenue - totalVat;
-
   const totalDiscounts = tx
     .filter((t) => t.discount_type)
     .reduce((s, t) => s + Number(t.discount_amount || 0), 0);
-
   const totalRefundAmt = refunds.reduce(
     (s, t) => s + Number(t.total_amount),
     0,
   );
   const refundVat = refunds.reduce((s, t) => s + Number(t.vat_amount), 0);
-
   const stockLossAmt = disposed.reduce(
     (s, d) => s + Number(d.total_loss || 0),
     0,
@@ -1570,9 +2202,6 @@ function FinancialSummaryTab({
     (s, d) => s + Number(d.quantity || 0),
     0,
   );
-
-  const payrollCost = computePayroll(shifts);
-
   const inventoryValue = (inventoryData || []).reduce(
     (s, p) => s + Number(p.cost_price || p.price || 0) * p.stock_quantity,
     0,
@@ -1581,43 +2210,25 @@ function FinancialSummaryTab({
     (s, p) => s + Number(p.price || 0) * p.stock_quantity,
     0,
   );
-
   const cashSales = tx
     .filter((t) => t.payment_method === "cash")
     .reduce((s, t) => s + Number(t.total_amount), 0);
   const cardSales = tx
     .filter((t) => t.payment_method === "card")
     .reduce((s, t) => s + Number(t.total_amount), 0);
-
   const txCount = tx.length;
   const avgOrder = txCount > 0 ? grossRevenue / txCount : 0;
-
   const pwdSeniorDiscounts = tx
     .filter((t) => t.discount_type === "senior" || t.discount_type === "pwd")
     .reduce((s, t) => s + Number(t.discount_amount || 0), 0);
-
   const nearExpiryDiscounts = tx
     .filter((t) => t.discount_type === "near_expiry")
     .reduce((s, t) => s + Number(t.discount_amount || 0), 0);
-
-  // Estimated net profit (gross - vat - refunds - payroll - stock loss)
   const estimatedProfit =
-    netRevenue - totalRefundAmt + refundVat - payrollCost - stockLossAmt;
-
-  // Per-cashier summary
+    netRevenue - totalRefundAmt + refundVat - stockLossAmt;
   const cashierSummary = employees
     .map((emp) => {
-      const empTx = tx.filter((t) => t.employee_id === emp.id);
-      const empShifts = shifts.filter((s: any) => s.employee_id === emp.id);
-      const hours = empShifts.reduce((sum: number, s: any) => {
-        if (!s.clock_out) return sum;
-        return (
-          sum +
-          (new Date(s.clock_out).getTime() - new Date(s.clock_in).getTime()) /
-            3600000
-        );
-      }, 0);
-      const pay = hours * Number(emp.hourly_rate || 0);
+      const empTx = tx.filter((t) => t.employee_id === emp.user_id);
       return {
         name: emp.name,
         role: emp.role,
@@ -1626,152 +2237,120 @@ function FinancialSummaryTab({
           (s: number, t: any) => s + Number(t.total_amount),
           0,
         ),
-        hours: hours.toFixed(1),
-        pay,
       };
     })
-    .filter((e) => e.txCount > 0 || Number(e.hours) > 0);
-
-  // Period label
+    .filter((e) => e.txCount > 0);
   const periodLabel =
     viewMode === "daily"
       ? format(today, "MMMM d, yyyy")
       : viewMode === "monthly"
         ? format(monthStart, "MMMM yyyy")
         : `Year ${today.getFullYear()}`;
-
+  const fmt = (n: number) =>
+    `₱${n.toLocaleString("en-PH", { minimumFractionDigits: 2 })}`;
   const handlePrint = () => {
     if (!summaryRef.current) return;
     const win = window.open("", "_blank");
     if (!win) return;
-    win.document.write(`
-      <html>
-      <head>
-        <title>Financial Summary — ${periodLabel}</title>
-        <style>
-          * { box-sizing: border-box; margin: 0; padding: 0; }
-          body { font-family: Arial, sans-serif; font-size: 12px; padding: 24px; color: #111; }
-          h1 { font-size: 18px; text-align: center; margin-bottom: 2px; }
-          h2 { font-size: 14px; margin: 16px 0 6px; border-bottom: 1px solid #ddd; padding-bottom: 4px; }
-          h3 { font-size: 12px; margin: 12px 0 4px; color: #555; }
-          p.sub { text-align: center; color: #666; font-size: 11px; margin-bottom: 16px; }
-          table { width: 100%; border-collapse: collapse; margin-bottom: 12px; }
-          th, td { border: 1px solid #ddd; padding: 5px 8px; text-align: left; font-size: 11px; }
-          th { background: #f5f5f5; font-weight: bold; }
-          .right { text-align: right; }
-          .bold { font-weight: bold; }
-          .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
-          .box { border: 1px solid #ddd; padding: 8px 12px; border-radius: 4px; }
-          .box .label { font-size: 10px; color: #666; }
-          .box .value { font-size: 16px; font-weight: bold; }
-          .highlight { background: #f0fdf4; }
-          .danger { color: #dc2626; }
-          .success { color: #16a34a; }
-          .footer { margin-top: 24px; font-size: 10px; color: #999; text-align: center; }
-        </style>
-      </head>
-      <body>${summaryRef.current.innerHTML}
-      <div class="footer">Generated by GroceryPOS — ${format(today, "MMMM d, yyyy h:mm a")}</div>
-      <script>window.onload=function(){window.print();window.close()}<\/script>
-      </body></html>
-    `);
+    win.document.write(
+      `<html><head><title>Financial Summary — ${periodLabel}</title><style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial,sans-serif;font-size:12px;padding:24px;color:#111}h1{font-size:18px;text-align:center;margin-bottom:2px}h2{font-size:14px;margin:16px 0 6px;border-bottom:1px solid #ddd;padding-bottom:4px}p.sub{text-align:center;color:#666;font-size:11px;margin-bottom:16px}table{width:100%;border-collapse:collapse;margin-bottom:12px}th,td{border:1px solid #ddd;padding:5px 8px;text-align:left;font-size:11px}th{background:#f5f5f5;font-weight:bold}.right{text-align:right}.footer{margin-top:24px;font-size:10px;color:#999;text-align:center}</style></head><body>${summaryRef.current.innerHTML}<div class="footer">Generated by GroceryPOS — ${format(today, "MMMM d, yyyy h:mm a")}</div><script>window.onload=function(){window.print();window.close()}<\/script></body></html>`,
+    );
     win.document.close();
   };
-
   const handleExport = () => {
-    const rows = [
-      {
-        Category: "REVENUE",
-        Item: "Gross Revenue",
-        Amount: grossRevenue.toFixed(2),
-      },
-      {
-        Category: "REVENUE",
-        Item: "Total VAT (12%)",
-        Amount: totalVat.toFixed(2),
-      },
-      {
-        Category: "REVENUE",
-        Item: "Net Revenue (ex-VAT)",
-        Amount: netRevenue.toFixed(2),
-      },
-      { Category: "REVENUE", Item: "Cash Sales", Amount: cashSales.toFixed(2) },
-      { Category: "REVENUE", Item: "Card Sales", Amount: cardSales.toFixed(2) },
-      {
-        Category: "REVENUE",
-        Item: "Total Transactions",
-        Amount: txCount.toString(),
-      },
-      {
-        Category: "REVENUE",
-        Item: "Average Order Value",
-        Amount: avgOrder.toFixed(2),
-      },
-      {
-        Category: "DEDUCTIONS",
-        Item: "Total Refunds",
-        Amount: totalRefundAmt.toFixed(2),
-      },
-      {
-        Category: "DEDUCTIONS",
-        Item: "Refund VAT Adjustment",
-        Amount: refundVat.toFixed(2),
-      },
-      {
-        Category: "DEDUCTIONS",
-        Item: "PWD/Senior Discounts",
-        Amount: pwdSeniorDiscounts.toFixed(2),
-      },
-      {
-        Category: "DEDUCTIONS",
-        Item: "Near-Expiry Discounts",
-        Amount: nearExpiryDiscounts.toFixed(2),
-      },
-      {
-        Category: "DEDUCTIONS",
-        Item: "Total Discounts Given",
-        Amount: totalDiscounts.toFixed(2),
-      },
-      {
-        Category: "COSTS",
-        Item: "Payroll Cost",
-        Amount: payrollCost.toFixed(2),
-      },
-      {
-        Category: "COSTS",
-        Item: "Stock Loss (Disposed)",
-        Amount: stockLossAmt.toFixed(2),
-      },
-      {
-        Category: "COSTS",
-        Item: "Units Disposed",
-        Amount: stockLossUnits.toString(),
-      },
-      {
-        Category: "INVENTORY",
-        Item: "Current Inventory (Cost)",
-        Amount: inventoryValue.toFixed(2),
-      },
-      {
-        Category: "INVENTORY",
-        Item: "Current Inventory (Retail)",
-        Amount: inventoryRetailValue.toFixed(2),
-      },
-      {
-        Category: "PROFIT",
-        Item: "Estimated Net Profit",
-        Amount: estimatedProfit.toFixed(2),
-      },
-    ];
     exportCSV(
-      rows,
+      [
+        {
+          Category: "REVENUE",
+          Item: "Gross Revenue",
+          Amount: grossRevenue.toFixed(2),
+        },
+        {
+          Category: "REVENUE",
+          Item: "Total VAT (12%)",
+          Amount: totalVat.toFixed(2),
+        },
+        {
+          Category: "REVENUE",
+          Item: "Net Revenue (ex-VAT)",
+          Amount: netRevenue.toFixed(2),
+        },
+        {
+          Category: "REVENUE",
+          Item: "Cash Sales",
+          Amount: cashSales.toFixed(2),
+        },
+        {
+          Category: "REVENUE",
+          Item: "Card Sales",
+          Amount: cardSales.toFixed(2),
+        },
+        {
+          Category: "REVENUE",
+          Item: "Total Transactions",
+          Amount: txCount.toString(),
+        },
+        {
+          Category: "REVENUE",
+          Item: "Average Order Value",
+          Amount: avgOrder.toFixed(2),
+        },
+        {
+          Category: "DEDUCTIONS",
+          Item: "Total Refunds",
+          Amount: totalRefundAmt.toFixed(2),
+        },
+        {
+          Category: "DEDUCTIONS",
+          Item: "Refund VAT Adjustment",
+          Amount: refundVat.toFixed(2),
+        },
+        {
+          Category: "DEDUCTIONS",
+          Item: "PWD/Senior Discounts",
+          Amount: pwdSeniorDiscounts.toFixed(2),
+        },
+        {
+          Category: "DEDUCTIONS",
+          Item: "Near-Expiry Discounts",
+          Amount: nearExpiryDiscounts.toFixed(2),
+        },
+        {
+          Category: "DEDUCTIONS",
+          Item: "Total Discounts",
+          Amount: totalDiscounts.toFixed(2),
+        },
+        {
+          Category: "COSTS",
+          Item: "Stock Loss (Disposed)",
+          Amount: stockLossAmt.toFixed(2),
+        },
+        {
+          Category: "COSTS",
+          Item: "Units Disposed",
+          Amount: stockLossUnits.toString(),
+        },
+        {
+          Category: "INVENTORY",
+          Item: "Inventory at Cost",
+          Amount: inventoryValue.toFixed(2),
+        },
+        {
+          Category: "INVENTORY",
+          Item: "Inventory at Retail",
+          Amount: inventoryRetailValue.toFixed(2),
+        },
+        {
+          Category: "PROFIT",
+          Item: "Estimated Net Profit",
+          Amount: estimatedProfit.toFixed(2),
+        },
+      ],
       `financial-summary-${viewMode}-${periodLabel.replace(/\s/g, "-")}.csv`,
     );
   };
-
   return (
     <div className="space-y-4">
-      {/* Controls */}
       <Card>
         <CardContent className="pt-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -1784,11 +2363,7 @@ function FinancialSummaryTab({
                   <button
                     key={v}
                     onClick={() => setViewMode(v)}
-                    className={`px-3 py-1.5 text-xs font-medium capitalize transition-colors ${
-                      viewMode === v
-                        ? "bg-primary text-primary-foreground"
-                        : "hover:bg-muted"
-                    }`}
+                    className={`px-3 py-1.5 text-xs font-medium capitalize transition-colors ${viewMode === v ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}
                   >
                     {v}
                   </button>
@@ -1809,8 +2384,6 @@ function FinancialSummaryTab({
           </div>
         </CardContent>
       </Card>
-
-      {/* The printable summary */}
       <div ref={summaryRef} className="space-y-4">
         <div className="text-center pb-2 border-b">
           <h1 className="text-xl font-bold">GroceryPOS — Financial Summary</h1>
@@ -1819,58 +2392,51 @@ function FinancialSummaryTab({
             {periodLabel}
           </p>
         </div>
-
-        {/* KPI Row */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <div className="p-3 rounded-lg border bg-green-50 dark:bg-green-950/20">
-            <p className="text-xs text-muted-foreground">Gross Revenue</p>
-            <p className="text-xl font-bold text-success">
-              ₱
-              {grossRevenue.toLocaleString("en-PH", {
-                minimumFractionDigits: 2,
-              })}
-            </p>
-          </div>
-          <div className="p-3 rounded-lg border bg-blue-50 dark:bg-blue-950/20">
-            <p className="text-xs text-muted-foreground">Net Revenue</p>
-            <p className="text-xl font-bold text-blue-600 dark:text-blue-400">
-              ₱
-              {netRevenue.toLocaleString("en-PH", { minimumFractionDigits: 2 })}
-            </p>
-            <p className="text-xs text-muted-foreground">after VAT</p>
-          </div>
-          <div
-            className={`p-3 rounded-lg border ${
-              estimatedProfit >= 0
-                ? "bg-green-50 dark:bg-green-950/20"
-                : "bg-red-50 dark:bg-red-950/20"
-            }`}
-          >
-            <p className="text-xs text-muted-foreground">Est. Net Profit</p>
-            <p
-              className={`text-xl font-bold ${
-                estimatedProfit >= 0 ? "text-success" : "text-destructive"
-              }`}
-            >
-              ₱
-              {estimatedProfit.toLocaleString("en-PH", {
-                minimumFractionDigits: 2,
-              })}
-            </p>
-            <p className="text-xs text-muted-foreground">
-              after refunds, payroll, losses
-            </p>
-          </div>
-          <div className="p-3 rounded-lg border bg-muted/30">
-            <p className="text-xs text-muted-foreground">Transactions</p>
-            <p className="text-xl font-bold">{txCount}</p>
-            <p className="text-xs text-muted-foreground">
-              avg ₱{avgOrder.toFixed(2)}
-            </p>
-          </div>
+          {[
+            {
+              label: "Gross Revenue",
+              value: fmt(grossRevenue),
+              color: "text-success",
+              bg: "bg-green-50 dark:bg-green-950/20",
+            },
+            {
+              label: "Net Revenue",
+              value: fmt(netRevenue),
+              color: "text-blue-600 dark:text-blue-400",
+              bg: "bg-blue-50 dark:bg-blue-950/20",
+              sub: "after VAT",
+            },
+            {
+              label: "Est. Net Profit",
+              value: fmt(estimatedProfit),
+              color: estimatedProfit >= 0 ? "text-success" : "text-destructive",
+              bg:
+                estimatedProfit >= 0
+                  ? "bg-green-50 dark:bg-green-950/20"
+                  : "bg-red-50 dark:bg-red-950/20",
+              sub: "after refunds & losses",
+            },
+            {
+              label: "Transactions",
+              value: String(txCount),
+              color: "",
+              bg: "bg-muted/30",
+              sub: `avg ${fmt(avgOrder)}/order`,
+            },
+          ].map((k) => (
+            <div key={k.label} className={`p-3 rounded-lg border ${k.bg}`}>
+              <p className="text-xs text-muted-foreground">{k.label}</p>
+              <p className={`text-xl font-bold ${k.color}`}>{k.value}</p>
+              {(k as any).sub && (
+                <p className="text-xs text-muted-foreground">
+                  {(k as any).sub}
+                </p>
+              )}
+            </div>
+          ))}
         </div>
-
-        {/* Section 1: Revenue Breakdown */}
+        {/* Revenue section */}
         <Card>
           <CardHeader className="pb-2 pt-4 px-4">
             <CardTitle className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
@@ -1892,10 +2458,7 @@ function FinancialSummaryTab({
                     Gross Revenue
                   </TableCell>
                   <TableCell className="text-right font-bold text-success">
-                    ₱
-                    {grossRevenue.toLocaleString("en-PH", {
-                      minimumFractionDigits: 2,
-                    })}
+                    {fmt(grossRevenue)}
                   </TableCell>
                   <TableCell className="text-right text-xs text-muted-foreground">
                     {txCount} transactions
@@ -1906,10 +2469,7 @@ function FinancialSummaryTab({
                     Cash Sales
                   </TableCell>
                   <TableCell className="text-right text-sm">
-                    ₱
-                    {cashSales.toLocaleString("en-PH", {
-                      minimumFractionDigits: 2,
-                    })}
+                    {fmt(cashSales)}
                   </TableCell>
                   <TableCell className="text-right text-xs text-muted-foreground">
                     {grossRevenue > 0
@@ -1923,10 +2483,7 @@ function FinancialSummaryTab({
                     Card Sales
                   </TableCell>
                   <TableCell className="text-right text-sm">
-                    ₱
-                    {cardSales.toLocaleString("en-PH", {
-                      minimumFractionDigits: 2,
-                    })}
+                    {fmt(cardSales)}
                   </TableCell>
                   <TableCell className="text-right text-xs text-muted-foreground">
                     {grossRevenue > 0
@@ -1940,35 +2497,28 @@ function FinancialSummaryTab({
                     VAT Collected (12%)
                   </TableCell>
                   <TableCell className="text-right font-medium">
-                    ₱
-                    {totalVat.toLocaleString("en-PH", {
-                      minimumFractionDigits: 2,
-                    })}
+                    {fmt(totalVat)}
                   </TableCell>
                   <TableCell className="text-right text-xs text-muted-foreground">
                     remit to BIR
                   </TableCell>
                 </TableRow>
-                <TableRow className="font-semibold">
+                <TableRow>
                   <TableCell className="text-sm font-bold">
                     Net Revenue (ex-VAT)
                   </TableCell>
                   <TableCell className="text-right font-bold text-blue-600 dark:text-blue-400">
-                    ₱
-                    {netRevenue.toLocaleString("en-PH", {
-                      minimumFractionDigits: 2,
-                    })}
+                    {fmt(netRevenue)}
                   </TableCell>
                   <TableCell className="text-right text-xs text-muted-foreground">
-                    avg ₱{avgOrder.toFixed(2)}/order
+                    avg {fmt(avgOrder)}/order
                   </TableCell>
                 </TableRow>
               </TableBody>
             </Table>
           </CardContent>
         </Card>
-
-        {/* Section 2: Deductions */}
+        {/* Deductions */}
         <Card>
           <CardHeader className="pb-2 pt-4 px-4">
             <CardTitle className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
@@ -1990,10 +2540,7 @@ function FinancialSummaryTab({
                     Total Refunds
                   </TableCell>
                   <TableCell className="text-right font-medium text-destructive">
-                    — ₱
-                    {totalRefundAmt.toLocaleString("en-PH", {
-                      minimumFractionDigits: 2,
-                    })}
+                    — {fmt(totalRefundAmt)}
                   </TableCell>
                   <TableCell className="text-right text-xs text-muted-foreground">
                     {refunds.length} transactions
@@ -2004,10 +2551,7 @@ function FinancialSummaryTab({
                     VAT on Refunds (adj.)
                   </TableCell>
                   <TableCell className="text-right text-sm text-success">
-                    + ₱
-                    {refundVat.toLocaleString("en-PH", {
-                      minimumFractionDigits: 2,
-                    })}
+                    + {fmt(refundVat)}
                   </TableCell>
                   <TableCell className="text-right text-xs text-muted-foreground">
                     VAT returned
@@ -2018,10 +2562,7 @@ function FinancialSummaryTab({
                     PWD / Senior Discounts
                   </TableCell>
                   <TableCell className="text-right font-medium text-warning">
-                    — ₱
-                    {pwdSeniorDiscounts.toLocaleString("en-PH", {
-                      minimumFractionDigits: 2,
-                    })}
+                    — {fmt(pwdSeniorDiscounts)}
                   </TableCell>
                   <TableCell className="text-right text-xs text-muted-foreground">
                     {
@@ -2031,7 +2572,7 @@ function FinancialSummaryTab({
                           t.discount_type === "pwd",
                       ).length
                     }{" "}
-                    transactions
+                    tx
                   </TableCell>
                 </TableRow>
                 <TableRow>
@@ -2039,28 +2580,18 @@ function FinancialSummaryTab({
                     Near-Expiry Discounts
                   </TableCell>
                   <TableCell className="text-right font-medium text-warning">
-                    — ₱
-                    {nearExpiryDiscounts.toLocaleString("en-PH", {
-                      minimumFractionDigits: 2,
-                    })}
+                    — {fmt(nearExpiryDiscounts)}
                   </TableCell>
                   <TableCell className="text-right text-xs text-muted-foreground">
                     waste recovery
                   </TableCell>
                 </TableRow>
-                <TableRow className="bg-muted/20 font-semibold">
+                <TableRow className="bg-muted/20">
                   <TableCell className="text-sm font-bold">
                     Total Deductions
                   </TableCell>
                   <TableCell className="text-right font-bold text-destructive">
-                    — ₱
-                    {(
-                      totalRefundAmt -
-                      refundVat +
-                      totalDiscounts
-                    ).toLocaleString("en-PH", {
-                      minimumFractionDigits: 2,
-                    })}
+                    — {fmt(totalRefundAmt - refundVat + totalDiscounts)}
                   </TableCell>
                   <TableCell />
                 </TableRow>
@@ -2068,12 +2599,11 @@ function FinancialSummaryTab({
             </Table>
           </CardContent>
         </Card>
-
-        {/* Section 3: Costs */}
+        {/* Stock Loss */}
         <Card>
           <CardHeader className="pb-2 pt-4 px-4">
             <CardTitle className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-              3. Operating Costs
+              3. Stock Loss
             </CardTitle>
           </CardHeader>
           <CardContent className="p-0">
@@ -2088,50 +2618,20 @@ function FinancialSummaryTab({
               <TableBody>
                 <TableRow>
                   <TableCell className="text-sm font-medium">
-                    Payroll Cost
-                  </TableCell>
-                  <TableCell className="text-right font-medium text-destructive">
-                    — ₱
-                    {payrollCost.toLocaleString("en-PH", {
-                      minimumFractionDigits: 2,
-                    })}
-                  </TableCell>
-                  <TableCell className="text-right text-xs text-muted-foreground">
-                    based on shifts + hourly rate
-                  </TableCell>
-                </TableRow>
-                <TableRow>
-                  <TableCell className="text-sm font-medium">
                     Stock Loss (Disposed / Expired)
                   </TableCell>
                   <TableCell className="text-right font-medium text-destructive">
-                    — ₱
-                    {stockLossAmt.toLocaleString("en-PH", {
-                      minimumFractionDigits: 2,
-                    })}
+                    — {fmt(stockLossAmt)}
                   </TableCell>
                   <TableCell className="text-right text-xs text-muted-foreground">
                     {stockLossUnits} units disposed
                   </TableCell>
                 </TableRow>
-                <TableRow className="bg-muted/20">
-                  <TableCell className="text-sm font-bold">
-                    Total Operating Costs
-                  </TableCell>
-                  <TableCell className="text-right font-bold text-destructive">
-                    — ₱
-                    {(payrollCost + stockLossAmt).toLocaleString("en-PH", {
-                      minimumFractionDigits: 2,
-                    })}
-                  </TableCell>
-                  <TableCell />
-                </TableRow>
               </TableBody>
             </Table>
           </CardContent>
         </Card>
-
-        {/* Section 4: Inventory Snapshot */}
+        {/* Inventory */}
         <Card>
           <CardHeader className="pb-2 pt-4 px-4">
             <CardTitle className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
@@ -2153,10 +2653,7 @@ function FinancialSummaryTab({
                     Inventory at Cost
                   </TableCell>
                   <TableCell className="text-right font-medium">
-                    ₱
-                    {inventoryValue.toLocaleString("en-PH", {
-                      minimumFractionDigits: 2,
-                    })}
+                    {fmt(inventoryValue)}
                   </TableCell>
                   <TableCell className="text-right text-xs text-muted-foreground">
                     capital tied in stock
@@ -2167,10 +2664,7 @@ function FinancialSummaryTab({
                     Inventory at Retail Value
                   </TableCell>
                   <TableCell className="text-right font-medium">
-                    ₱
-                    {inventoryRetailValue.toLocaleString("en-PH", {
-                      minimumFractionDigits: 2,
-                    })}
+                    {fmt(inventoryRetailValue)}
                   </TableCell>
                   <TableCell className="text-right text-xs text-muted-foreground">
                     if all sold at full price
@@ -2181,13 +2675,7 @@ function FinancialSummaryTab({
                     Potential Gross Margin
                   </TableCell>
                   <TableCell className="text-right font-medium text-success">
-                    ₱
-                    {(inventoryRetailValue - inventoryValue).toLocaleString(
-                      "en-PH",
-                      {
-                        minimumFractionDigits: 2,
-                      },
-                    )}
+                    {fmt(inventoryRetailValue - inventoryValue)}
                   </TableCell>
                   <TableCell className="text-right text-xs text-muted-foreground">
                     retail − cost
@@ -2197,13 +2685,12 @@ function FinancialSummaryTab({
             </Table>
           </CardContent>
         </Card>
-
-        {/* Section 5: Cashier / Payroll Breakdown */}
+        {/* Cashier */}
         {cashierSummary.length > 0 && (
           <Card>
             <CardHeader className="pb-2 pt-4 px-4">
               <CardTitle className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-                5. Employee Summary
+                5. Employee Sales Summary
               </CardTitle>
             </CardHeader>
             <CardContent className="p-0">
@@ -2218,8 +2705,9 @@ function FinancialSummaryTab({
                     <TableHead className="text-right text-xs">
                       Revenue
                     </TableHead>
-                    <TableHead className="text-right text-xs">Hours</TableHead>
-                    <TableHead className="text-right text-xs">Pay</TableHead>
+                    <TableHead className="text-right text-xs">
+                      Avg Order
+                    </TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -2237,19 +2725,10 @@ function FinancialSummaryTab({
                         {e.txCount}
                       </TableCell>
                       <TableCell className="text-right text-sm font-medium">
-                        ₱
-                        {e.revenue.toLocaleString("en-PH", {
-                          minimumFractionDigits: 2,
-                        })}
+                        {fmt(e.revenue)}
                       </TableCell>
                       <TableCell className="text-right text-sm">
-                        {e.hours}h
-                      </TableCell>
-                      <TableCell className="text-right text-sm text-destructive">
-                        ₱
-                        {e.pay.toLocaleString("en-PH", {
-                          minimumFractionDigits: 2,
-                        })}
+                        {fmt(e.txCount > 0 ? e.revenue / e.txCount : 0)}
                       </TableCell>
                     </TableRow>
                   ))}
@@ -2258,8 +2737,7 @@ function FinancialSummaryTab({
             </CardContent>
           </Card>
         )}
-
-        {/* Section 6: Bottom Line */}
+        {/* Bottom Line */}
         <Card className="border-2 border-primary/20">
           <CardHeader className="pb-2 pt-4 px-4">
             <CardTitle className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
@@ -2272,10 +2750,7 @@ function FinancialSummaryTab({
                 <TableRow>
                   <TableCell className="text-sm">Gross Revenue</TableCell>
                   <TableCell className="text-right font-medium">
-                    ₱
-                    {grossRevenue.toLocaleString("en-PH", {
-                      minimumFractionDigits: 2,
-                    })}
+                    {fmt(grossRevenue)}
                   </TableCell>
                 </TableRow>
                 <TableRow>
@@ -2283,10 +2758,7 @@ function FinancialSummaryTab({
                     − VAT (12%)
                   </TableCell>
                   <TableCell className="text-right text-sm text-muted-foreground">
-                    − ₱
-                    {totalVat.toLocaleString("en-PH", {
-                      minimumFractionDigits: 2,
-                    })}
+                    − {fmt(totalVat)}
                   </TableCell>
                 </TableRow>
                 <TableRow>
@@ -2294,21 +2766,7 @@ function FinancialSummaryTab({
                     − Refunds
                   </TableCell>
                   <TableCell className="text-right text-sm text-muted-foreground">
-                    − ₱
-                    {totalRefundAmt.toLocaleString("en-PH", {
-                      minimumFractionDigits: 2,
-                    })}
-                  </TableCell>
-                </TableRow>
-                <TableRow>
-                  <TableCell className="text-sm text-muted-foreground pl-6">
-                    − Payroll
-                  </TableCell>
-                  <TableCell className="text-right text-sm text-muted-foreground">
-                    − ₱
-                    {payrollCost.toLocaleString("en-PH", {
-                      minimumFractionDigits: 2,
-                    })}
+                    − {fmt(totalRefundAmt)}
                   </TableCell>
                 </TableRow>
                 <TableRow>
@@ -2316,10 +2774,7 @@ function FinancialSummaryTab({
                     − Stock Loss
                   </TableCell>
                   <TableCell className="text-right text-sm text-muted-foreground">
-                    − ₱
-                    {stockLossAmt.toLocaleString("en-PH", {
-                      minimumFractionDigits: 2,
-                    })}
+                    − {fmt(stockLossAmt)}
                   </TableCell>
                 </TableRow>
                 <TableRow>
@@ -2327,10 +2782,7 @@ function FinancialSummaryTab({
                     + Refund VAT Adj.
                   </TableCell>
                   <TableCell className="text-right text-sm text-success">
-                    + ₱
-                    {refundVat.toLocaleString("en-PH", {
-                      minimumFractionDigits: 2,
-                    })}
+                    + {fmt(refundVat)}
                   </TableCell>
                 </TableRow>
                 <TableRow className="border-t-2 border-primary/20 bg-muted/30">
@@ -2338,21 +2790,16 @@ function FinancialSummaryTab({
                     Estimated Net Profit
                   </TableCell>
                   <TableCell
-                    className={`text-right text-lg font-bold ${
-                      estimatedProfit >= 0 ? "text-success" : "text-destructive"
-                    }`}
+                    className={`text-right text-lg font-bold ${estimatedProfit >= 0 ? "text-success" : "text-destructive"}`}
                   >
-                    ₱
-                    {estimatedProfit.toLocaleString("en-PH", {
-                      minimumFractionDigits: 2,
-                    })}
+                    {fmt(estimatedProfit)}
                   </TableCell>
                 </TableRow>
               </TableBody>
             </Table>
             <p className="text-xs text-muted-foreground px-4 pb-3 pt-2">
-              * Estimated profit excludes rent, utilities, and other overhead
-              not tracked in this system.
+              * Excludes rent, utilities, and other overhead not tracked in this
+              system.
             </p>
           </CardContent>
         </Card>

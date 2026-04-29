@@ -1,3 +1,4 @@
+/* eslint-disable react-hooks/static-components */
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -39,7 +40,20 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Pencil, Clock, LogIn, LogOut, Trash2 } from "lucide-react";
+import { Separator } from "@/components/ui/separator";
+import {
+  Plus,
+  Pencil,
+  Clock,
+  Trash2,
+  Eye,
+  EyeOff,
+  User,
+  Mail,
+  Phone,
+  ShieldCheck,
+  KeyRound,
+} from "lucide-react";
 import { toast } from "sonner";
 import { format } from "date-fns";
 import { useUserRole } from "@/hooks/useUserRole";
@@ -49,16 +63,22 @@ export default function Employees() {
   const [editingEmployee, setEditingEmployee] = useState<any>(null);
   const [selectedEmployee, setSelectedEmployee] = useState<string | null>(null);
   const [deleteEmployeeId, setDeleteEmployeeId] = useState<string | null>(null);
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const queryClient = useQueryClient();
-  const { canManageEmployees } = useUserRole();
+  const { canManageEmployees, isAdmin } = useUserRole();
 
   const [form, setForm] = useState({
     name: "",
     email: "",
     phone: "",
-    role: "cashier" as string,
+    role: "cashier" as "cashier" | "admin" | "stock_clerk",
     hourly_rate: "",
+    password: "",
+    confirmPassword: "",
   });
+
+  const [errors, setErrors] = useState<Record<string, string>>({});
 
   const { data: employees } = useQuery({
     queryKey: ["employees"],
@@ -68,17 +88,6 @@ export default function Employees() {
         .select("*")
         .eq("is_active", true)
         .order("name");
-      return data || [];
-    },
-  });
-
-  const { data: activeShifts } = useQuery({
-    queryKey: ["active-shifts"],
-    queryFn: async () => {
-      const { data } = await supabase
-        .from("shifts")
-        .select("*")
-        .is("clock_out", null);
       return data || [];
     },
   });
@@ -104,8 +113,13 @@ export default function Employees() {
       phone: "",
       role: "cashier",
       hourly_rate: "",
+      password: "",
+      confirmPassword: "",
     });
+    setErrors({});
     setEditingEmployee(null);
+    setShowPassword(false);
+    setShowConfirmPassword(false);
   };
 
   const openEdit = (emp: any) => {
@@ -116,37 +130,97 @@ export default function Employees() {
       phone: emp.phone || "",
       role: emp.role,
       hourly_rate: String(emp.hourly_rate || ""),
+      password: "",
+      confirmPassword: "",
     });
+    setErrors({});
     setDialogOpen(true);
+  };
+
+  const validate = () => {
+    const newErrors: Record<string, string> = {};
+    if (!form.name.trim()) newErrors.name = "Name is required";
+    if (!form.email.trim()) newErrors.email = "Email is required";
+    else if (!/\S+@\S+\.\S+/.test(form.email))
+      newErrors.email = "Enter a valid email";
+
+    if (!editingEmployee) {
+      if (!form.password) newErrors.password = "Password is required";
+      else if (form.password.length < 6)
+        newErrors.password = "Password must be at least 6 characters";
+      if (!form.confirmPassword)
+        newErrors.confirmPassword = "Please confirm your password";
+      else if (form.password !== form.confirmPassword)
+        newErrors.confirmPassword = "Passwords do not match";
+    }
+
+    setErrors(newErrors);
+    return Object.keys(newErrors).length === 0;
   };
 
   const saveMutation = useMutation({
     mutationFn: async () => {
+      if (!validate()) throw new Error("Validation failed");
+
       const payload = {
-        name: form.name,
-        email: form.email || null,
-        phone: form.phone || null,
-        role: form.role as "cashier" | "manager" | "stock_clerk",
+        name: form.name.trim(),
+        email: form.email.trim() || null,
+        phone: form.phone.trim() || null,
+        role: form.role as "cashier" | "admin" | "stock_clerk",
         hourly_rate: parseFloat(form.hourly_rate) || 0,
       };
+
       if (editingEmployee) {
+        // Edit mode — just update employees table, no auth changes
         const { error } = await supabase
           .from("employees")
           .update(payload)
           .eq("id", editingEmployee.id);
         if (error) throw error;
       } else {
-        const { error } = await supabase.from("employees").insert(payload);
-        if (error) throw error;
+        // Create mode — signup via auth first, then insert to employees
+        const { data: authData, error: authError } =
+          await supabase.auth.admin.createUser({
+            email: form.email.trim(),
+            password: form.password,
+            email_confirm: true,
+          });
+
+        // Fallback: use signUp if admin.createUser is not available
+        let userId: string;
+        if (authError) {
+          // Try regular signUp as fallback
+          const { data: signUpData, error: signUpError } =
+            await supabase.auth.signUp({
+              email: form.email.trim(),
+              password: form.password,
+            });
+          if (signUpError) throw signUpError;
+          if (!signUpData.user) throw new Error("Failed to create auth user");
+          userId = signUpData.user.id;
+        } else {
+          if (!authData.user) throw new Error("Failed to create auth user");
+          userId = authData.user.id;
+        }
+
+        const { error: empError } = await supabase.from("employees").insert({
+          ...payload,
+          user_id: userId,
+        });
+        if (empError) throw empError;
       }
     },
     onSuccess: () => {
-      toast.success(editingEmployee ? "Employee updated" : "Employee added");
+      toast.success(
+        editingEmployee ? "Employee updated" : "Employee account created",
+      );
       queryClient.invalidateQueries({ queryKey: ["employees"] });
       setDialogOpen(false);
       resetForm();
     },
-    onError: (error: any) => toast.error(error.message),
+    onError: (error: any) => {
+      if (error.message !== "Validation failed") toast.error(error.message);
+    },
   });
 
   const deleteMutation = useMutation({
@@ -164,41 +238,9 @@ export default function Employees() {
     },
   });
 
-  const clockInMutation = useMutation({
-    mutationFn: async (employeeId: string) => {
-      const { error } = await supabase
-        .from("shifts")
-        .insert({ employee_id: employeeId });
-      if (error) throw error;
-    },
-    onSuccess: () => {
-      toast.success("Clocked in");
-      queryClient.invalidateQueries({ queryKey: ["active-shifts"] });
-      queryClient.invalidateQueries({ queryKey: ["shift-history"] });
-    },
-  });
-
-  const clockOutMutation = useMutation({
-    mutationFn: async (shiftId: string) => {
-      const { error } = await supabase
-        .from("shifts")
-        .update({ clock_out: new Date().toISOString() })
-        .eq("id", shiftId);
-      if (error) throw error;
-    },
-    onSuccess: () => {
-      toast.success("Clocked out");
-      queryClient.invalidateQueries({ queryKey: ["active-shifts"] });
-      queryClient.invalidateQueries({ queryKey: ["shift-history"] });
-    },
-  });
-
-  const getActiveShift = (employeeId: string) =>
-    activeShifts?.find((s) => s.employee_id === employeeId);
-
   const getRoleBadge = (role: string) => {
     const colors: Record<string, string> = {
-      manager: "bg-primary text-primary-foreground",
+      admin: "bg-primary text-primary-foreground",
       cashier: "bg-success text-success-foreground",
       stock_clerk: "bg-warning text-warning-foreground",
     };
@@ -206,6 +248,46 @@ export default function Employees() {
       <Badge className={colors[role] || ""}>{role.replace("_", " ")}</Badge>
     );
   };
+
+  const PasswordInput = ({
+    id,
+    value,
+    onChange,
+    show,
+    onToggle,
+    placeholder,
+    error,
+  }: {
+    id: string;
+    value: string;
+    onChange: (v: string) => void;
+    show: boolean;
+    onToggle: () => void;
+    placeholder: string;
+    error?: string;
+  }) => (
+    <div className="space-y-1">
+      <div className="relative">
+        <Input
+          id={id}
+          type={show ? "text" : "password"}
+          placeholder={placeholder}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          className={`pr-10 ${error ? "border-destructive" : ""}`}
+        />
+        <button
+          type="button"
+          onClick={onToggle}
+          tabIndex={-1}
+          className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+        >
+          {show ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+        </button>
+      </div>
+      {error && <p className="text-xs text-destructive">{error}</p>}
+    </div>
+  );
 
   return (
     <div className="space-y-6">
@@ -216,7 +298,9 @@ export default function Employees() {
             {employees?.length || 0} active employees
           </p>
         </div>
-        {canManageEmployees && (
+
+        {/* Only admins can open the create dialog */}
+        {isAdmin && (
           <Dialog
             open={dialogOpen}
             onOpenChange={(open) => {
@@ -229,87 +313,188 @@ export default function Employees() {
                 <Plus className="h-4 w-4 mr-2" /> Add Employee
               </Button>
             </DialogTrigger>
-            <DialogContent>
+            <DialogContent className="max-w-lg">
               <DialogHeader>
-                <DialogTitle>
-                  {editingEmployee ? "Edit Employee" : "Add Employee"}
+                <DialogTitle className="flex items-center gap-2">
+                  <User className="h-5 w-5 text-primary" />
+                  {editingEmployee
+                    ? "Edit Employee"
+                    : "Create Employee Account"}
                 </DialogTitle>
+                {!editingEmployee && (
+                  <p className="text-sm text-muted-foreground pt-1">
+                    This will create a login account and add them to the
+                    employee list.
+                  </p>
+                )}
               </DialogHeader>
+
               <form
                 onSubmit={(e) => {
                   e.preventDefault();
                   saveMutation.mutate();
                 }}
-                className="space-y-4"
+                className="space-y-5 pt-2"
               >
-                <div className="space-y-2">
-                  <Label>Name *</Label>
-                  <Input
-                    value={form.name}
-                    onChange={(e) => setForm({ ...form, name: e.target.value })}
-                    required
-                  />
-                </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label>Email</Label>
-                    <Input
-                      type="email"
-                      value={form.email}
-                      onChange={(e) =>
-                        setForm({ ...form, email: e.target.value })
-                      }
-                    />
+                {/* Personal Info */}
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                    <User className="h-3.5 w-3.5" /> Personal Info
                   </div>
-                  <div className="space-y-2">
-                    <Label>Phone</Label>
+                  <div className="space-y-1">
+                    <Label htmlFor="name">Full Name *</Label>
                     <Input
-                      value={form.phone}
+                      id="name"
+                      placeholder="e.g. Maria Santos"
+                      value={form.name}
                       onChange={(e) =>
-                        setForm({ ...form, phone: e.target.value })
+                        setForm({ ...form, name: e.target.value })
                       }
+                      className={errors.name ? "border-destructive" : ""}
                     />
+                    {errors.name && (
+                      <p className="text-xs text-destructive">{errors.name}</p>
+                    )}
                   </div>
-                </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label>Role</Label>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1">
+                      <Label htmlFor="phone">
+                        <span className="flex items-center gap-1">
+                          <Phone className="h-3 w-3" /> Phone
+                        </span>
+                      </Label>
+                      <Input
+                        id="phone"
+                        placeholder="09xxxxxxxxx"
+                        value={form.phone}
+                        onChange={(e) =>
+                          setForm({ ...form, phone: e.target.value })
+                        }
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label htmlFor="hourly_rate">Hourly Rate (₱)</Label>
+                      <Input
+                        id="hourly_rate"
+                        type="number"
+                        step="0.01"
+                        placeholder="Optional"
+                        value={form.hourly_rate}
+                        onChange={(e) =>
+                          setForm({ ...form, hourly_rate: e.target.value })
+                        }
+                      />
+                    </div>
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor="role">
+                      <span className="flex items-center gap-1">
+                        <ShieldCheck className="h-3 w-3" /> Role *
+                      </span>
+                    </Label>
                     <Select
                       value={form.role}
-                      onValueChange={(v) => setForm({ ...form, role: v })}
+                      onValueChange={(v) =>
+                        setForm({
+                          ...form,
+                          role: v as "cashier" | "admin" | "stock_clerk",
+                        })
+                      }
                     >
                       <SelectTrigger>
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="cashier">Cashier</SelectItem>
-                        <SelectItem value="manager">Manager</SelectItem>
                         <SelectItem value="stock_clerk">Stock Clerk</SelectItem>
+                        <SelectItem value="admin">Admin</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
-                  <div className="space-y-2">
-                    <Label>Hourly Rate (₱)</Label>
-                    <Input
-                      type="number"
-                      step="0.01"
-                      value={form.hourly_rate}
-                      onChange={(e) =>
-                        setForm({ ...form, hourly_rate: e.target.value })
-                      }
-                    />
-                  </div>
                 </div>
+
+                <Separator />
+
+                {/* Account Credentials */}
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                    <KeyRound className="h-3.5 w-3.5" /> Login Credentials
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor="email">
+                      <span className="flex items-center gap-1">
+                        <Mail className="h-3 w-3" /> Email *
+                      </span>
+                    </Label>
+                    <Input
+                      id="email"
+                      type="email"
+                      placeholder="employee@store.com"
+                      value={form.email}
+                      onChange={(e) =>
+                        setForm({ ...form, email: e.target.value })
+                      }
+                      disabled={!!editingEmployee}
+                      className={errors.email ? "border-destructive" : ""}
+                    />
+                    {errors.email && (
+                      <p className="text-xs text-destructive">{errors.email}</p>
+                    )}
+                    {editingEmployee && (
+                      <p className="text-xs text-muted-foreground">
+                        Email cannot be changed after account creation.
+                      </p>
+                    )}
+                  </div>
+
+                  {!editingEmployee && (
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-1">
+                        <Label htmlFor="password">Password *</Label>
+                        <PasswordInput
+                          id="password"
+                          value={form.password}
+                          onChange={(v) => setForm({ ...form, password: v })}
+                          show={showPassword}
+                          onToggle={() => setShowPassword((s) => !s)}
+                          placeholder="Min. 6 characters"
+                          error={errors.password}
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label htmlFor="confirmPassword">Confirm *</Label>
+                        <PasswordInput
+                          id="confirmPassword"
+                          value={form.confirmPassword}
+                          onChange={(v) =>
+                            setForm({ ...form, confirmPassword: v })
+                          }
+                          show={showConfirmPassword}
+                          onToggle={() => setShowConfirmPassword((s) => !s)}
+                          placeholder="Re-enter password"
+                          error={errors.confirmPassword}
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+
                 <Button
                   type="submit"
                   className="w-full"
                   disabled={saveMutation.isPending}
+                  size="lg"
                 >
-                  {saveMutation.isPending
-                    ? "Saving..."
-                    : editingEmployee
-                      ? "Update"
-                      : "Add Employee"}
+                  {saveMutation.isPending ? (
+                    <span className="flex items-center gap-2">
+                      <span className="h-4 w-4 border-2 border-primary-foreground/40 border-t-primary-foreground rounded-full animate-spin" />
+                      {editingEmployee ? "Saving..." : "Creating account..."}
+                    </span>
+                  ) : editingEmployee ? (
+                    "Save Changes"
+                  ) : (
+                    "Create Employee Account"
+                  )}
                 </Button>
               </form>
             </DialogContent>
@@ -329,12 +514,10 @@ export default function Employees() {
                     <TableHead>Role</TableHead>
                     <TableHead>Contact</TableHead>
                     <TableHead>Status</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {employees?.map((emp) => {
-                    const activeShift = getActiveShift(emp.id);
                     return (
                       <TableRow
                         key={emp.id}
@@ -350,40 +533,9 @@ export default function Employees() {
                         <TableCell className="text-muted-foreground text-sm">
                           {emp.email || emp.phone || "—"}
                         </TableCell>
-                        <TableCell>
-                          {activeShift ? (
-                            <Badge className="bg-success text-success-foreground">
-                              On Shift
-                            </Badge>
-                          ) : (
-                            <Badge variant="secondary">Off</Badge>
-                          )}
-                        </TableCell>
+
                         <TableCell className="text-right">
                           <div className="flex justify-end gap-1">
-                            {activeShift ? (
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  clockOutMutation.mutate(activeShift.id);
-                                }}
-                              >
-                                <LogOut className="h-3 w-3 mr-1" /> Out
-                              </Button>
-                            ) : (
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  clockInMutation.mutate(emp.id);
-                                }}
-                              >
-                                <LogIn className="h-3 w-3 mr-1" /> In
-                              </Button>
-                            )}
                             {canManageEmployees && (
                               <>
                                 <Button

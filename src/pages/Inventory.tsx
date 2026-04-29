@@ -1,6 +1,7 @@
+/* eslint-disable react-hooks/set-state-in-effect */
 /* eslint-disable @typescript-eslint/no-explicit-any */
 /* eslint-disable react-hooks/static-components */
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent } from "@/components/ui/card";
@@ -48,6 +49,8 @@ import {
   ArrowUpDown,
   AlertTriangle,
   Tag,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useUserRole } from "@/hooks/useUserRole";
@@ -55,6 +58,8 @@ import { subDays, differenceInDays, format } from "date-fns";
 
 type SortKey = "name" | "price" | "stock_quantity";
 type SortDir = "asc" | "desc";
+
+const ITEMS_PER_PAGE = 20;
 
 const getExpiryZone = (expiryDate: string | null) => {
   if (!expiryDate) return "none";
@@ -85,8 +90,14 @@ export default function Inventory() {
     name: string;
     qty: number;
   } | null>(null);
+  const [currentPage, setCurrentPage] = useState(1);
   const queryClient = useQueryClient();
   const { canManageInventory, isAdmin } = useUserRole();
+
+  // Reset page whenever filters/search/sort changes
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [search, categoryFilter, stockFilter, expiryFilter, sortKey, sortDir]);
 
   const [form, setForm] = useState({
     name: "",
@@ -176,6 +187,12 @@ export default function Inventory() {
           : Number(aVal) - Number(bVal);
       return sortDir === "asc" ? cmp : -cmp;
     });
+
+  const totalPages = Math.ceil(filteredProducts.length / ITEMS_PER_PAGE);
+  const paginatedProducts = filteredProducts.slice(
+    (currentPage - 1) * ITEMS_PER_PAGE,
+    currentPage * ITEMS_PER_PAGE,
+  );
 
   const toggleSort = (key: SortKey) => {
     if (sortKey === key) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
@@ -390,6 +407,7 @@ export default function Inventory() {
           <h1 className="text-2xl font-semibold tracking-tight">Inventory</h1>
           <p className="text-muted-foreground">
             {filteredProducts.length} products
+            {totalPages > 1 && ` — page ${currentPage} of ${totalPages}`}
           </p>
         </div>
         {canManageInventory && (
@@ -561,7 +579,7 @@ export default function Inventory() {
 
       {/* Filters */}
       <div className="flex flex-wrap gap-3">
-        <div className="relative flex-1 min-w-[200px]">
+        <div className="relative flex-1 min-w-50">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
             placeholder="Search products..."
@@ -629,7 +647,7 @@ export default function Inventory() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {filteredProducts.map((product) => {
+              {paginatedProducts.map((product) => {
                 const zone = getExpiryZone(product.expiry_date);
                 const disc = Number(product.discount_percentage) || 0;
                 return (
@@ -756,6 +774,70 @@ export default function Inventory() {
           </Table>
         </CardContent>
       </Card>
+
+      {/* Pagination */}
+      {totalPages > 1 && (
+        <div className="flex items-center justify-between">
+          <p className="text-sm text-muted-foreground">
+            Showing {(currentPage - 1) * ITEMS_PER_PAGE + 1}–
+            {Math.min(currentPage * ITEMS_PER_PAGE, filteredProducts.length)} of{" "}
+            {filteredProducts.length} products
+          </p>
+          <div className="flex items-center gap-1">
+            <Button
+              variant="outline"
+              size="icon"
+              className="h-8 w-8"
+              onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+              disabled={currentPage === 1}
+            >
+              <ChevronLeft className="h-4 w-4" />
+            </Button>
+
+            {Array.from({ length: totalPages }, (_, i) => i + 1)
+              .filter(
+                (p) =>
+                  p === 1 || p === totalPages || Math.abs(p - currentPage) <= 1,
+              )
+              .reduce<(number | "...")[]>((acc, p, idx, arr) => {
+                if (idx > 0 && (p as number) - (arr[idx - 1] as number) > 1)
+                  acc.push("...");
+                acc.push(p);
+                return acc;
+              }, [])
+              .map((p, i) =>
+                p === "..." ? (
+                  <span
+                    key={`ellipsis-${i}`}
+                    className="px-1 text-sm text-muted-foreground"
+                  >
+                    …
+                  </span>
+                ) : (
+                  <Button
+                    key={p}
+                    variant={currentPage === p ? "default" : "outline"}
+                    size="icon"
+                    className="h-8 w-8 text-xs"
+                    onClick={() => setCurrentPage(p as number)}
+                  >
+                    {p}
+                  </Button>
+                ),
+              )}
+
+            <Button
+              variant="outline"
+              size="icon"
+              className="h-8 w-8"
+              onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+              disabled={currentPage === totalPages}
+            >
+              <ChevronRight className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
+      )}
 
       {/* Delete Confirmation */}
       <AlertDialog
