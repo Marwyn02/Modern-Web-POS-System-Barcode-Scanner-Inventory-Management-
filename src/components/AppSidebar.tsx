@@ -17,6 +17,8 @@ import {
   ArrowUpCircle,
   Sun,
   Moon,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import {
@@ -37,11 +39,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
 import {
   Select,
   SelectContent,
@@ -67,7 +64,6 @@ type CashboxForm = {
 };
 
 // ── Countdown Button ──────────────────────────────────────────────────────────
-// Shows a 10-second countdown before enabling the confirm button — prevents accidental misclicks.
 function CountdownConfirmButton({
   label,
   pendingLabel,
@@ -87,7 +83,6 @@ function CountdownConfirmButton({
   const [ready, setReady] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Start countdown as soon as this component mounts (popover opened)
   useEffect(() => {
     setCountdown(seconds);
     setReady(false);
@@ -116,7 +111,6 @@ function CountdownConfirmButton({
       {!ready && (
         <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-muted/50 border border-border">
           <div className="relative h-7 w-7 shrink-0">
-            {/* SVG ring countdown */}
             <svg className="h-7 w-7 -rotate-90" viewBox="0 0 28 28">
               <circle
                 cx="14"
@@ -160,6 +154,23 @@ function CountdownConfirmButton({
   );
 }
 
+// ── Inline Panel ──────────────────────────────────────────────────────────────
+// Replaces Popover — renders content inline below the trigger button
+function InlinePanel({
+  open,
+  children,
+}: {
+  open: boolean;
+  children: React.ReactNode;
+}) {
+  if (!open) return null;
+  return (
+    <div className="mx-2 mb-2 rounded-lg border bg-sidebar shadow-md overflow-hidden">
+      <div className="p-3 space-y-3">{children}</div>
+    </div>
+  );
+}
+
 // ── Main Sidebar ──────────────────────────────────────────────────────────────
 export function AppSidebar() {
   const { state, setOpenMobile } = useSidebar();
@@ -169,7 +180,6 @@ export function AppSidebar() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
-  // Shift-related local state
   const [clockInCash, setClockInCash] = useState("");
   const [clockOutCash, setClockOutCash] = useState("");
   const [clockInOpen, setClockInOpen] = useState(false);
@@ -181,7 +191,6 @@ export function AppSidebar() {
     reason: "",
   });
 
-  // Day management local state
   const [startDayOpen, setStartDayOpen] = useState(false);
   const [endDayOpen, setEndDayOpen] = useState(false);
   const [dayNotes, setDayNotes] = useState("");
@@ -254,7 +263,6 @@ export function AppSidebar() {
     },
   });
 
-  // Today's day log
   const todayStr = format(new Date(), "yyyy-MM-dd");
   const { data: todayDayLog, refetch: refetchDayLog } = useQuery({
     queryKey: ["sidebar-day-log", todayStr],
@@ -268,7 +276,6 @@ export function AppSidebar() {
     },
   });
 
-  // Is any shift currently active store-wide? (to know if day can be closed)
   const { data: anyActiveShift } = useQuery({
     queryKey: ["sidebar-any-active-shift"],
     queryFn: async () => {
@@ -284,7 +291,6 @@ export function AppSidebar() {
 
   const dayStatus: DayStatus = todayDayLog ? "closed" : "open";
 
-  // ── Today's summary for day-closing ──────────────────────────────────────────
   const { data: todayTxSummary } = useQuery({
     queryKey: ["sidebar-today-summary"],
     enabled: endDayOpen,
@@ -469,7 +475,6 @@ export function AppSidebar() {
     onError: (e: any) => toast.error(e.message),
   });
 
-  // ── Bulk day-close logic ──────────────────────────────────────────────────────
   const closeDayMutation = useMutation({
     mutationFn: async ({
       dateStr,
@@ -585,7 +590,6 @@ export function AppSidebar() {
         closeDayMutation.mutate({ dateStr: yesterday, isAutoClose: true });
       }
     };
-    // Check every minute
     const interval = setInterval(checkAutoClose, 60_000);
     return () => clearInterval(interval);
   }, [closeDayMutation, todayDayLog]);
@@ -734,27 +738,31 @@ export function AppSidebar() {
                 </div>
               )}
 
-              {/* START DAY — only when day is closed/no record yet */}
+              {/* START DAY */}
               {dayStatus !== "open" && (
-                <Popover
-                  open={startDayOpen}
-                  onOpenChange={(o) => {
-                    setStartDayOpen(o);
-                    if (!o) setDayNotes("");
-                  }}
-                >
-                  <PopoverTrigger asChild>
-                    <Button
-                      variant="ghost"
-                      size={showText ? "default" : "icon"}
-                      className="w-full justify-start text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 dark:hover:bg-emerald-950/20"
-                    >
-                      <Sun className="h-4 w-4 shrink-0" />
-                      {showText && <span className="ml-2">Start Day</span>}
-                    </Button>
-                  </PopoverTrigger>
-                  <PopoverContent side="right" className="w-80 p-4 space-y-4">
-                    {/* Header */}
+                <>
+                  <Button
+                    variant="ghost"
+                    size={showText ? "default" : "icon"}
+                    className="w-full justify-start text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 dark:hover:bg-emerald-950/20"
+                    onClick={() => {
+                      setStartDayOpen((v) => !v);
+                      setEndDayOpen(false);
+                    }}
+                  >
+                    <Sun className="h-4 w-4 shrink-0" />
+                    {showText && (
+                      <>
+                        <span className="ml-2 flex-1 text-left">Start Day</span>
+                        {startDayOpen ? (
+                          <ChevronUp className="h-3.5 w-3.5" />
+                        ) : (
+                          <ChevronDown className="h-3.5 w-3.5" />
+                        )}
+                      </>
+                    )}
+                  </Button>
+                  <InlinePanel open={startDayOpen}>
                     <div className="text-center space-y-1 pb-3 border-b">
                       <div className="h-10 w-10 rounded-full bg-emerald-500/10 flex items-center justify-center mx-auto">
                         <Sun className="h-5 w-5 text-emerald-500" />
@@ -766,22 +774,18 @@ export function AppSidebar() {
                         {format(new Date(), "EEEE, MMMM d, yyyy")}
                       </p>
                     </div>
-
-                    {/* Simple note field */}
                     <div className="space-y-1">
                       <Label className="text-xs text-muted-foreground">
                         Opening Notes (optional)
                       </Label>
                       <Textarea
-                        placeholder="e.g. Holiday shift, skeleton crew, special event…"
+                        placeholder="e.g. Holiday shift, skeleton crew…"
                         value={dayNotes}
                         onChange={(e: any) => setDayNotes(e.target.value)}
                         rows={2}
                         className="resize-none text-sm"
                       />
                     </div>
-
-                    {/* Countdown confirm */}
                     <CountdownConfirmButton
                       label="Open Store for Today"
                       pendingLabel="Opening…"
@@ -797,35 +801,39 @@ export function AppSidebar() {
                       variant="success"
                       seconds={10}
                     />
-
                     <p className="text-[10px] text-muted-foreground text-center leading-tight">
-                      Shifts and sales can be recorded once the day is open. The
-                      day closes automatically at 3 AM if not closed manually.
+                      The day closes automatically at 3 AM if not closed
+                      manually.
                     </p>
-                  </PopoverContent>
-                </Popover>
+                  </InlinePanel>
+                </>
               )}
 
-              {/* END DAY — show when day is open */}
+              {/* END DAY */}
               {dayStatus === "open" && (
-                <Popover
-                  open={endDayOpen}
-                  onOpenChange={(o) => {
-                    setEndDayOpen(o);
-                    if (!o) setDayNotes("");
-                  }}
-                >
-                  <PopoverTrigger asChild>
-                    <Button
-                      variant="ghost"
-                      size={showText ? "default" : "icon"}
-                      className="w-full justify-start text-blue-600 hover:text-blue-700 hover:bg-blue-50 dark:hover:bg-blue-950/20"
-                    >
-                      <Moon className="h-4 w-4 shrink-0" />
-                      {showText && <span className="ml-2">End Day</span>}
-                    </Button>
-                  </PopoverTrigger>
-                  <PopoverContent side="right" className="w-80 p-4 space-y-4">
+                <>
+                  <Button
+                    variant="ghost"
+                    size={showText ? "default" : "icon"}
+                    className="w-full justify-start text-blue-600 hover:text-blue-700 hover:bg-blue-50 dark:hover:bg-blue-950/20"
+                    onClick={() => {
+                      setEndDayOpen((v) => !v);
+                      setStartDayOpen(false);
+                    }}
+                  >
+                    <Moon className="h-4 w-4 shrink-0" />
+                    {showText && (
+                      <>
+                        <span className="ml-2 flex-1 text-left">End Day</span>
+                        {endDayOpen ? (
+                          <ChevronUp className="h-3.5 w-3.5" />
+                        ) : (
+                          <ChevronDown className="h-3.5 w-3.5" />
+                        )}
+                      </>
+                    )}
+                  </Button>
+                  <InlinePanel open={endDayOpen}>
                     <div>
                       <h4 className="font-semibold text-sm flex items-center gap-2">
                         <Moon className="h-4 w-4 text-blue-500" />
@@ -836,11 +844,10 @@ export function AppSidebar() {
                         <span className="font-medium">
                           {format(new Date(), "MMMM d, yyyy")}
                         </span>{" "}
-                        and saves it to the bookkeeping log.
+                        and saves it to bookkeeping.
                       </p>
                     </div>
 
-                    {/* Active shifts warning */}
                     {anyActiveShift && anyActiveShift.length > 0 && (
                       <div className="rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-950/20 p-3 space-y-1">
                         <p className="text-xs font-semibold text-amber-700 dark:text-amber-400">
@@ -859,7 +866,6 @@ export function AppSidebar() {
                       </div>
                     )}
 
-                    {/* Today's snapshot */}
                     {todayTxSummary ? (
                       <div className="rounded-lg border bg-muted/30 p-3 space-y-1.5 text-xs">
                         <p className="font-semibold text-muted-foreground mb-2">
@@ -943,20 +949,19 @@ export function AppSidebar() {
                       isPending={closeDayMutation.isPending}
                       variant="default"
                     />
-                  </PopoverContent>
-                </Popover>
+                  </InlinePanel>
+                </>
               )}
             </div>
           </SidebarGroupContent>
         </SidebarGroup>
 
-        {/* ── Shift & Cashbox Controls (only when day is open) ── */}
+        {/* ── Shift & Cashbox Controls ── */}
         {currentEmployee && dayStatus === "open" && (
           <SidebarGroup>
             {showText && <SidebarGroupLabel>My Shift</SidebarGroupLabel>}
             <SidebarGroupContent>
               <div className={`space-y-1 ${showText ? "px-2" : "px-1"}`}>
-                {/* Active shift indicator */}
                 {showText && activeShift && (
                   <div className="flex items-center gap-1.5 px-2 py-1.5 rounded-md bg-success/10 mb-2">
                     <div className="h-2 w-2 rounded-full bg-success animate-pulse" />
@@ -968,18 +973,32 @@ export function AppSidebar() {
 
                 {/* Start Shift */}
                 {!activeShift && (
-                  <Popover open={clockInOpen} onOpenChange={setClockInOpen}>
-                    <PopoverTrigger asChild>
-                      <Button
-                        variant="ghost"
-                        size={showText ? "default" : "icon"}
-                        className="w-full justify-start text-muted-foreground hover:text-foreground hover:bg-sidebar-accent"
-                      >
-                        <Timer className="h-4 w-4 shrink-0" />
-                        {showText && <span className="ml-2">Start Shift</span>}
-                      </Button>
-                    </PopoverTrigger>
-                    <PopoverContent side="right" className="w-72 p-4 space-y-4">
+                  <>
+                    <Button
+                      variant="ghost"
+                      size={showText ? "default" : "icon"}
+                      className="w-full justify-start text-muted-foreground hover:text-foreground hover:bg-sidebar-accent"
+                      onClick={() => {
+                        setClockInOpen((v) => !v);
+                        setClockOutOpen(false);
+                        setCashboxOpen(false);
+                      }}
+                    >
+                      <Timer className="h-4 w-4 shrink-0" />
+                      {showText && (
+                        <>
+                          <span className="ml-2 flex-1 text-left">
+                            Start Shift
+                          </span>
+                          {clockInOpen ? (
+                            <ChevronUp className="h-3.5 w-3.5" />
+                          ) : (
+                            <ChevronDown className="h-3.5 w-3.5" />
+                          )}
+                        </>
+                      )}
+                    </Button>
+                    <InlinePanel open={clockInOpen}>
                       <div>
                         <h4 className="font-semibold text-sm flex items-center gap-2">
                           <Timer className="h-4 w-4 text-success" /> Start Shift
@@ -1053,24 +1072,38 @@ export function AppSidebar() {
                           ? "Starting..."
                           : "Start Shift"}
                       </Button>
-                    </PopoverContent>
-                  </Popover>
+                    </InlinePanel>
+                  </>
                 )}
 
                 {/* End Shift */}
                 {activeShift && (
-                  <Popover open={clockOutOpen} onOpenChange={setClockOutOpen}>
-                    <PopoverTrigger asChild>
-                      <Button
-                        variant="ghost"
-                        size={showText ? "default" : "icon"}
-                        className="w-full justify-start text-destructive hover:text-destructive hover:bg-destructive/10"
-                      >
-                        <TimerOff className="h-4 w-4 shrink-0" />
-                        {showText && <span className="ml-2">End Shift</span>}
-                      </Button>
-                    </PopoverTrigger>
-                    <PopoverContent side="right" className="w-72 p-4 space-y-4">
+                  <>
+                    <Button
+                      variant="ghost"
+                      size={showText ? "default" : "icon"}
+                      className="w-full justify-start text-destructive hover:text-destructive hover:bg-destructive/10"
+                      onClick={() => {
+                        setClockOutOpen((v) => !v);
+                        setClockInOpen(false);
+                        setCashboxOpen(false);
+                      }}
+                    >
+                      <TimerOff className="h-4 w-4 shrink-0" />
+                      {showText && (
+                        <>
+                          <span className="ml-2 flex-1 text-left">
+                            End Shift
+                          </span>
+                          {clockOutOpen ? (
+                            <ChevronUp className="h-3.5 w-3.5" />
+                          ) : (
+                            <ChevronDown className="h-3.5 w-3.5" />
+                          )}
+                        </>
+                      )}
+                    </Button>
+                    <InlinePanel open={clockOutOpen}>
                       <div>
                         <h4 className="font-semibold text-sm flex items-center gap-2">
                           <TimerOff className="h-4 w-4 text-destructive" /> End
@@ -1119,32 +1152,45 @@ export function AppSidebar() {
                           {clockOutMutation.isPending ? "Ending..." : "Confirm"}
                         </Button>
                       </div>
-                    </PopoverContent>
-                  </Popover>
+                    </InlinePanel>
+                  </>
                 )}
 
                 {/* Cashbox Log */}
                 {activeShift && (
-                  <Popover open={cashboxOpen} onOpenChange={setCashboxOpen}>
-                    <PopoverTrigger asChild>
-                      <Button
-                        variant="ghost"
-                        size={showText ? "default" : "icon"}
-                        className="w-full justify-start text-muted-foreground hover:text-foreground hover:bg-sidebar-accent"
-                      >
-                        <DollarSign className="h-4 w-4 shrink-0" />
-                        {showText && <span className="ml-2">Cashbox Log</span>}
-                      </Button>
-                    </PopoverTrigger>
-                    <PopoverContent side="right" className="w-80 p-4 space-y-4">
+                  <>
+                    <Button
+                      variant="ghost"
+                      size={showText ? "default" : "icon"}
+                      className="w-full justify-start text-muted-foreground hover:text-foreground hover:bg-sidebar-accent"
+                      onClick={() => {
+                        setCashboxOpen((v) => !v);
+                        setClockOutOpen(false);
+                        setClockInOpen(false);
+                      }}
+                    >
+                      <DollarSign className="h-4 w-4 shrink-0" />
+                      {showText && (
+                        <>
+                          <span className="ml-2 flex-1 text-left">
+                            Cashbox Log
+                          </span>
+                          {cashboxOpen ? (
+                            <ChevronUp className="h-3.5 w-3.5" />
+                          ) : (
+                            <ChevronDown className="h-3.5 w-3.5" />
+                          )}
+                        </>
+                      )}
+                    </Button>
+                    <InlinePanel open={cashboxOpen}>
                       <div>
                         <h4 className="font-semibold text-sm flex items-center gap-2">
                           <DollarSign className="h-4 w-4 text-primary" />{" "}
                           Cashbox Adjustment
                         </h4>
                         <p className="text-xs text-muted-foreground mt-1">
-                          Log any cash added or removed from the cashbox outside
-                          of transactions.
+                          Log any cash added or removed outside of transactions.
                         </p>
                       </div>
 
@@ -1227,8 +1273,8 @@ export function AppSidebar() {
                           ? "Saving..."
                           : "Save Log"}
                       </Button>
-                    </PopoverContent>
-                  </Popover>
+                    </InlinePanel>
+                  </>
                 )}
               </div>
             </SidebarGroupContent>
