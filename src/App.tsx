@@ -1,11 +1,3 @@
-/* eslint-disable @typescript-eslint/no-unused-vars */
-// App.tsx — replace your existing AppRoutes function with this
-// Also add these imports at the top:
-//   import PendingAccess from "./pages/PendingAccess";
-//   import AdminAccess   from "./pages/AdminAccess";
-//   import { useSessionAccess } from "@/hooks/useSessionAccess";
-//   import { sessionNotify } from "@/utils/sessionNotify";
-
 import { useEffect, useState } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Route, Routes } from "react-router-dom";

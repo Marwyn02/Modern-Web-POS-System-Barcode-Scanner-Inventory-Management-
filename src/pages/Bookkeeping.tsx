@@ -1,7 +1,7 @@
 /* eslint-disable react-hooks/rules-of-hooks */
 /* eslint-disable no-useless-escape */
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -38,18 +38,16 @@ import {
   FileText,
   Download,
   RotateCcw,
-  Eye,
   Printer,
   AlertTriangle,
   ChevronLeft,
   ChevronRight,
   BookOpen,
   CalendarDays,
-  Clock,
-  CheckCircle2,
-  XCircle,
   Layers,
   ArrowRight,
+  PackageMinus,
+  Clock,
 } from "lucide-react";
 import {
   format,
@@ -59,25 +57,58 @@ import {
   endOfMonth,
   subMonths,
   subDays,
-  getMonth,
-  getYear,
 } from "date-fns";
 import { useNavigate } from "react-router-dom";
 
 const BK_PAGE_SIZE = 10;
+
+interface DaySummary {
+  date: string;
+  revenue: number;
+  vat: number;
+  net: number;
+  cash: number;
+  card: number;
+  txCount: number;
+  refundAmt: number;
+  refundCount: number;
+  discountAmt: number;
+  discountCount: number;
+  stockLoss: number;
+  netProfit: number;
+}
+
+interface MonthSummary {
+  yearMonth: string;
+  label: string;
+  revenue: number;
+  vat: number;
+  net: number;
+  cash: number;
+  card: number;
+  txCount: number;
+  refundAmt: number;
+  refundCount: number;
+  discountAmt: number;
+  discountCount: number;
+  stockLoss: number;
+  netProfit: number;
+}
 
 export default function Bookkeeping() {
   const today = new Date();
   const navigate = useNavigate();
   const [selectedMonth, setSelectedMonth] = useState(format(today, "yyyy-MM"));
   const [dailyDetailDate, setDailyDetailDate] = useState<string | null>(null);
-  const [dailyPage, setDailyPage] = useState(1);
+  const [dailyRecordsPage, setDailyRecordsPage] = useState(1);
+  const [monthlyRecordsPage, setMonthlyRecordsPage] = useState(1);
   const [lowStockPage, setLowStockPage] = useState(1);
   const [slowMovingPage, setSlowMovingPage] = useState(1);
   const [vatPage, setVatPage] = useState(1);
   const [refundsPage, setRefundsPage] = useState(1);
   const [discountsPage, setDiscountsPage] = useState(1);
   const [disposedPage, setDisposedPage] = useState(1);
+  const [withdrawalPage, setWithdrawalPage] = useState(1);
 
   const dailyReportRef = useRef<HTMLDivElement>(null);
 
@@ -87,11 +118,11 @@ export default function Bookkeeping() {
   const todayEnd = endOfDay(today).toISOString();
 
   useEffect(() => {
-    setDailyPage(1);
     setVatPage(1);
     setRefundsPage(1);
     setDiscountsPage(1);
     setDisposedPage(1);
+    setWithdrawalPage(1);
   }, [selectedMonth]);
 
   // ── Queries ──────────────────────────────────────────────────────────────────
@@ -207,6 +238,34 @@ export default function Bookkeeping() {
     },
   });
 
+  // Monthly Records — need all-time transactions
+  const { data: allTxForRecords } = useQuery({
+    queryKey: ["bk-all-tx-records"],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("transactions")
+        .select(
+          "created_at, total_amount, vat_amount, payment_method, discount_type, discount_amount, status",
+        )
+        .not("created_at", "is", null)
+        .in("status", ["completed", "refunded"])
+        .order("created_at", { ascending: false });
+      return data || [];
+    },
+  });
+
+  // Monthly Records stock loss — all-time disposed
+  const { data: allDisposedForRecords } = useQuery({
+    queryKey: ["bk-all-disposed-records"],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("disposed_items")
+        .select("disposed_at, total_loss")
+        .not("disposed_at", "is", null);
+      return data || [];
+    },
+  });
+
   const thirtyDaysAgo = subDays(new Date(), 30).toISOString();
   const { data: slowMoving } = useQuery({
     queryKey: ["bk-slow-moving"],
@@ -263,31 +322,6 @@ export default function Bookkeeping() {
     },
   });
 
-  const { data: dailyLogs } = useQuery({
-    queryKey: ["bk-daily-logs"],
-    queryFn: async () => {
-      const { data } = await supabase
-        .from("daily_logs")
-        .select("*")
-        .order("log_date", { ascending: false })
-        .limit(60);
-      return data || [];
-    },
-  });
-
-  const { data: monthlyLogs } = useQuery({
-    queryKey: ["bk-monthly-logs"],
-    queryFn: async () => {
-      const { data } = await supabase
-        .from("monthly_logs")
-        .select("*")
-        .order("log_year", { ascending: false })
-        .order("log_month", { ascending: false })
-        .limit(24);
-      return data || [];
-    },
-  });
-
   const { data: shiftLogs } = useQuery({
     queryKey: ["bk-shift-logs", selectedMonth],
     queryFn: async () => {
@@ -302,13 +336,148 @@ export default function Bookkeeping() {
     },
   });
 
-  const todayDateStr = format(today, "yyyy-MM-dd");
-  const todayLog = (dailyLogs || []).find((l) => l.log_date === todayDateStr);
-  const thisMonthLog = (monthlyLogs || []).find(
-    (l) =>
-      l.log_year === getYear(monthStart) &&
-      l.log_month === getMonth(monthStart) + 1,
-  );
+  const { data: withdrawalLogs } = useQuery({
+    queryKey: ["bk-withdrawal-logs", selectedMonth],
+    queryFn: async () => {
+      const { data } = await (supabase as any)
+        .from("item_withdrawals")
+        .select("*, products(name, unit)")
+        .gte("created_at", startOfDay(monthStart).toISOString())
+        .lte("created_at", endOfDay(monthEnd).toISOString())
+        .order("created_at", { ascending: false });
+      return data || ([] as any[]);
+    },
+  });
+
+  // Daily Records — grouped from existing monthTx + monthRefunds + disposedItems
+  const dailyRecordSummaries = useMemo(() => {
+    const lossMap: Record<string, number> = {};
+    (disposedItems || []).forEach((d) => {
+      if (!d.disposed_at) return;
+      const day = format(new Date(d.disposed_at), "yyyy-MM-dd");
+      lossMap[day] = (lossMap[day] || 0) + Number(d.total_loss || 0);
+    });
+
+    const map = new Map<string, DaySummary>();
+    const ensure = (day: string) => {
+      if (!map.has(day))
+        map.set(day, {
+          date: day,
+          revenue: 0,
+          vat: 0,
+          net: 0,
+          cash: 0,
+          card: 0,
+          txCount: 0,
+          refundAmt: 0,
+          refundCount: 0,
+          discountAmt: 0,
+          discountCount: 0,
+          stockLoss: 0,
+          netProfit: 0,
+        });
+      return map.get(day)!;
+    };
+
+    (monthTx || []).forEach((tx) => {
+      if (!tx.created_at) return;
+      const day = format(new Date(tx.created_at), "yyyy-MM-dd");
+      const s = ensure(day);
+      s.revenue += Number(tx.total_amount);
+      s.vat += Number(tx.vat_amount);
+      s.txCount += 1;
+      if (tx.payment_method === "cash") s.cash += Number(tx.total_amount);
+      if (tx.payment_method === "card") s.card += Number(tx.total_amount);
+      if (tx.discount_type) {
+        s.discountAmt += Number(tx.discount_amount || 0);
+        s.discountCount += 1;
+      }
+    });
+
+    (monthRefunds || []).forEach((tx) => {
+      if (!tx.created_at) return;
+      const day = format(new Date(tx.created_at), "yyyy-MM-dd");
+      const s = ensure(day);
+      s.refundAmt += Number(tx.total_amount);
+      s.refundCount += 1;
+    });
+
+    map.forEach((s, day) => {
+      s.net = s.revenue - s.vat;
+      s.stockLoss = lossMap[day] || 0;
+      s.netProfit = s.net - s.refundAmt - s.stockLoss;
+    });
+
+    return Array.from(map.values()).sort((a, b) =>
+      b.date.localeCompare(a.date),
+    );
+  }, [monthTx, monthRefunds, disposedItems]);
+
+  // Monthly Records — uses allTxForRecords + allDisposedForRecords
+  const monthlyRecordSummaries = useMemo(() => {
+    const lossMap: Record<string, number> = {};
+    (allDisposedForRecords || []).forEach((d) => {
+      // <-- allDisposedForRecords used here
+      if (!d.disposed_at) return;
+      const ym = format(new Date(d.disposed_at), "yyyy-MM");
+      lossMap[ym] = (lossMap[ym] || 0) + Number(d.total_loss || 0);
+    });
+
+    const map = new Map<string, MonthSummary>();
+    const ensure = (ym: string) => {
+      if (!map.has(ym)) {
+        const [y, m] = ym.split("-").map(Number);
+        map.set(ym, {
+          yearMonth: ym,
+          label: format(new Date(y, m - 1, 1), "MMMM yyyy"),
+          revenue: 0,
+          vat: 0,
+          net: 0,
+          cash: 0,
+          card: 0,
+          txCount: 0,
+          refundAmt: 0,
+          refundCount: 0,
+          discountAmt: 0,
+          discountCount: 0,
+          stockLoss: 0,
+          netProfit: 0,
+        });
+      }
+      return map.get(ym)!;
+    };
+
+    (allTxForRecords || []).forEach((tx) => {
+      // <-- allTxForRecords used here
+      if (!tx.created_at) return;
+      const ym = format(new Date(tx.created_at), "yyyy-MM");
+      const s = ensure(ym);
+      if (tx.status === "completed") {
+        s.revenue += Number(tx.total_amount);
+        s.vat += Number(tx.vat_amount);
+        s.txCount += 1;
+        if (tx.payment_method === "cash") s.cash += Number(tx.total_amount);
+        if (tx.payment_method === "card") s.card += Number(tx.total_amount);
+        if (tx.discount_type) {
+          s.discountAmt += Number(tx.discount_amount || 0);
+          s.discountCount += 1;
+        }
+      } else if (tx.status === "refunded") {
+        s.refundAmt += Number(tx.total_amount);
+        s.refundCount += 1;
+      }
+    });
+
+    map.forEach((s, ym) => {
+      s.net = s.revenue - s.vat;
+      s.stockLoss = lossMap[ym] || 0;
+      s.netProfit = s.net - s.refundAmt - s.stockLoss;
+    });
+
+    return Array.from(map.values()).sort((a, b) =>
+      b.yearMonth.localeCompare(a.yearMonth),
+    );
+  }, [allTxForRecords, allDisposedForRecords]);
 
   // ── Derived calcs ──────────────────────────────────────────────────────────
   const todayRevenue = (todayTx || []).reduce(
@@ -359,6 +528,16 @@ export default function Bookkeeping() {
   const monthWasteLoss = (disposedItems || []).reduce(
     (s, d) => s + Number(d.total_loss),
     0,
+  );
+
+  const pagedDailyRecords = dailyRecordSummaries.slice(
+    (dailyRecordsPage - 1) * BK_PAGE_SIZE,
+    dailyRecordsPage * BK_PAGE_SIZE,
+  );
+
+  const pagedMonthlyRecords = monthlyRecordSummaries.slice(
+    (monthlyRecordsPage - 1) * BK_PAGE_SIZE,
+    monthlyRecordsPage * BK_PAGE_SIZE,
   );
 
   const cashierPerf = (employees || [])
@@ -422,6 +601,12 @@ export default function Bookkeeping() {
     const d = subMonths(today, i);
     return { value: format(d, "yyyy-MM"), label: format(d, "MMMM yyyy") };
   });
+
+  const withdrawals = (withdrawalLogs || []) as any[];
+  const pagedWithdrawals = withdrawals.slice(
+    (withdrawalPage - 1) * BK_PAGE_SIZE,
+    withdrawalPage * BK_PAGE_SIZE,
+  );
 
   const exportCSV = (data: Record<string, any>[], filename: string) => {
     if (!data.length) return;
@@ -510,10 +695,6 @@ export default function Bookkeeping() {
     );
   };
 
-  const pagedDailyBreakdown = dailyBreakdown.slice(
-    (dailyPage - 1) * BK_PAGE_SIZE,
-    dailyPage * BK_PAGE_SIZE,
-  );
   const pagedVat = dailyBreakdown.slice(
     (vatPage - 1) * BK_PAGE_SIZE,
     vatPage * BK_PAGE_SIZE,
@@ -563,32 +744,6 @@ export default function Bookkeeping() {
             ))}
           </SelectContent>
         </Select>
-      </div>
-
-      {/* Close status banners */}
-      <div className="flex flex-wrap gap-2">
-        {todayLog ? (
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-500/20 text-xs text-emerald-700 dark:text-emerald-400">
-            <CheckCircle2 className="h-3.5 w-3.5" />
-            Today closed — {format(new Date(todayLog.created_at), "h:mm a")}
-          </div>
-        ) : (
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-500/20 text-xs text-amber-700 dark:text-amber-400">
-            <XCircle className="h-3.5 w-3.5" />
-            Today not yet closed — use the sidebar to close the day
-          </div>
-        )}
-        {thisMonthLog ? (
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-blue-50 dark:bg-blue-950/20 border border-blue-500/20 text-xs text-blue-700 dark:text-blue-400">
-            <CheckCircle2 className="h-3.5 w-3.5" />
-            {format(monthStart, "MMMM yyyy")} month closed
-          </div>
-        ) : (
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-muted/50 border text-xs text-muted-foreground">
-            <XCircle className="h-3.5 w-3.5" />
-            {format(monthStart, "MMMM yyyy")} not yet closed
-          </div>
-        )}
       </div>
 
       {/* Today's summary cards */}
@@ -657,7 +812,7 @@ export default function Bookkeeping() {
             <FileText className="h-4 w-4 mr-1" /> Financial Summary
           </TabsTrigger>
           <TabsTrigger value="daily" className="shrink-0">
-            <Receipt className="h-4 w-4 mr-1" /> Daily Sales
+            <Receipt className="h-4 w-4 mr-1" /> Sales & Records
           </TabsTrigger>
           <TabsTrigger value="top" className="shrink-0">
             <Package className="h-4 w-4 mr-1" /> Top Products
@@ -694,140 +849,292 @@ export default function Bookkeeping() {
           />
         </TabsContent>
 
-        {/* ── Daily Sales ── */}
+        {/* ── Sales & Records ── */}
         <TabsContent value="daily" className="space-y-4">
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-            {[
-              {
-                label: "Gross Revenue",
-                value: `₱${monthRevenue.toFixed(2)}`,
-                color: "text-success",
-              },
-              {
-                label: "Total VAT",
-                value: `₱${monthVat.toFixed(2)}`,
-                color: "",
-              },
-              {
-                label: "Net Revenue",
-                value: `₱${monthNet.toFixed(2)}`,
-                color: "",
-              },
-              {
-                label: "Refunds",
-                value: `₱${monthRefundTotal.toFixed(2)}`,
-                color: "text-destructive",
-              },
-              {
-                label: "Transactions",
-                value: String(monthTx?.length || 0),
-                color: "",
-              },
-            ].map((s) => (
-              <div key={s.label} className="p-3 rounded-lg border bg-muted/30">
-                <p className="text-xs text-muted-foreground">{s.label}</p>
-                <p className={`text-lg font-bold ${s.color}`}>{s.value}</p>
-                <p className="text-xs text-muted-foreground">
-                  {format(monthStart, "MMMM yyyy")}
-                </p>
-              </div>
-            ))}
-          </div>
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between">
-              <CardTitle className="text-base">
-                Daily Breakdown — {format(monthStart, "MMMM yyyy")}
-              </CardTitle>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() =>
-                  exportCSV(
-                    dailyBreakdown.map((d) => ({
-                      Date: d.date,
-                      Revenue: d.revenue.toFixed(2),
-                      VAT: d.vat.toFixed(2),
-                      Net: (d.revenue - d.vat).toFixed(2),
-                      Transactions: d.txCount,
-                      Refunds: d.refunds.toFixed(2),
-                    })),
-                    `daily-sales-${selectedMonth}.csv`,
-                  )
-                }
+          <Tabs defaultValue="daily-records">
+            <TabsList className="mb-4">
+              <TabsTrigger
+                value="daily-records"
+                className="flex items-center gap-1.5"
               >
-                <Download className="h-4 w-4 mr-1" /> Export
-              </Button>
-            </CardHeader>
-            <CardContent className="p-0">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Date</TableHead>
-                    <TableHead className="text-right">Transactions</TableHead>
-                    <TableHead className="text-right">Revenue</TableHead>
-                    <TableHead className="text-right">Refunds</TableHead>
-                    <TableHead className="text-right">VAT</TableHead>
-                    <TableHead className="text-right">Net</TableHead>
-                    <TableHead className="text-right">Detail</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {pagedDailyBreakdown.map((d) => (
-                    <TableRow
-                      key={d.date}
-                      className="cursor-pointer hover:bg-muted/50"
-                      onClick={() => setDailyDetailDate(d.date)}
-                    >
-                      <TableCell>
-                        {format(new Date(d.date), "MMM d, yyyy")}
-                      </TableCell>
-                      <TableCell className="text-right">{d.txCount}</TableCell>
-                      <TableCell className="text-right font-medium">
-                        ₱{d.revenue.toFixed(2)}
-                      </TableCell>
-                      <TableCell className="text-right text-destructive">
-                        {d.refunds > 0 ? `₱${d.refunds.toFixed(2)}` : "—"}
-                      </TableCell>
-                      <TableCell className="text-right text-muted-foreground">
-                        ₱{d.vat.toFixed(2)}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        ₱{(d.revenue - d.vat).toFixed(2)}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          className="h-7 w-7"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setDailyDetailDate(d.date);
-                          }}
+                <CalendarDays className="h-3.5 w-3.5" /> Daily Records
+              </TabsTrigger>
+              <TabsTrigger
+                value="monthly-records"
+                className="flex items-center gap-1.5"
+              >
+                <Layers className="h-3.5 w-3.5" /> Monthly Records
+              </TabsTrigger>
+            </TabsList>
+
+            {/* ── Daily Records ── */}
+            <TabsContent value="daily-records" className="space-y-3">
+              <div className="flex items-center justify-between">
+                <p className="text-sm text-muted-foreground">
+                  Transactions for{" "}
+                  <span className="font-medium text-foreground">
+                    {format(monthStart, "MMMM yyyy")}
+                  </span>{" "}
+                  grouped by day.
+                </p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() =>
+                    exportCSV(
+                      dailyRecordSummaries.map((r) => ({
+                        Date: r.date,
+                        "Gross Revenue": r.revenue.toFixed(2),
+                        VAT: r.vat.toFixed(2),
+                        "Net Revenue": r.net.toFixed(2),
+                        Cash: r.cash.toFixed(2),
+                        Card: r.card.toFixed(2),
+                        Transactions: r.txCount,
+                        Refunds: r.refundAmt.toFixed(2),
+                        "Refund Count": r.refundCount,
+                        "Discount Amount": r.discountAmt.toFixed(2),
+                        "Discount Count": r.discountCount,
+                        "Stock Loss": r.stockLoss.toFixed(2),
+                        "Net Profit": r.netProfit.toFixed(2),
+                      })),
+                      `daily-records-${selectedMonth}.csv`,
+                    )
+                  }
+                >
+                  <Download className="h-4 w-4 mr-1" /> Export
+                </Button>
+              </div>
+
+              <Card>
+                <CardContent className="p-0">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Date</TableHead>
+                        <TableHead className="text-right">Tx</TableHead>
+                        <TableHead className="text-right">
+                          Gross Revenue
+                        </TableHead>
+                        <TableHead className="text-right">VAT</TableHead>
+                        <TableHead className="text-right">
+                          Net Revenue
+                        </TableHead>
+                        <TableHead className="text-right">Cash</TableHead>
+                        <TableHead className="text-right">Card</TableHead>
+                        <TableHead className="text-right">Refunds</TableHead>
+                        <TableHead className="text-right">Discounts</TableHead>
+                        <TableHead className="text-right">Stock Loss</TableHead>
+                        <TableHead className="text-right">Net Profit</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {pagedDailyRecords.map((r) => (
+                        <TableRow
+                          key={r.date}
+                          className="cursor-pointer hover:bg-muted/50 group"
                         >
-                          <Eye className="h-3 w-3" />
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                  {pagedDailyBreakdown.length === 0 && (
-                    <TableRow>
-                      <TableCell
-                        colSpan={7}
-                        className="text-center py-8 text-muted-foreground"
-                      >
-                        No data
-                      </TableCell>
-                    </TableRow>
-                  )}
-                </TableBody>
-              </Table>
-              <BkPagination
-                page={dailyPage}
-                setPage={setDailyPage}
-                total={dailyBreakdown.length}
-              />
-            </CardContent>
-          </Card>
+                          <TableCell className="font-medium whitespace-nowrap">
+                            {format(new Date(r.date), "MMM d, yyyy")}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            {r.txCount}
+                          </TableCell>
+                          <TableCell className="text-right font-medium text-success">
+                            {fmt(r.revenue)}
+                          </TableCell>
+                          <TableCell className="text-right text-muted-foreground">
+                            {fmt(r.vat)}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            {fmt(r.net)}
+                          </TableCell>
+                          <TableCell className="text-right text-muted-foreground">
+                            {fmt(r.cash)}
+                          </TableCell>
+                          <TableCell className="text-right text-muted-foreground">
+                            {fmt(r.card)}
+                          </TableCell>
+                          <TableCell className="text-right text-destructive">
+                            {r.refundAmt > 0
+                              ? `${fmt(r.refundAmt)} (${r.refundCount})`
+                              : "—"}
+                          </TableCell>
+                          <TableCell className="text-right text-warning">
+                            {r.discountAmt > 0 ? fmt(r.discountAmt) : "—"}
+                          </TableCell>
+                          <TableCell className="text-right text-destructive">
+                            {r.stockLoss > 0 ? fmt(r.stockLoss) : "—"}
+                          </TableCell>
+                          <TableCell
+                            className={`text-right font-bold ${
+                              r.netProfit >= 0
+                                ? "text-success"
+                                : "text-destructive"
+                            }`}
+                          >
+                            {fmt(r.netProfit)}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                      {dailyRecordSummaries.length === 0 && (
+                        <TableRow>
+                          <TableCell
+                            colSpan={12}
+                            className="text-center py-10 text-muted-foreground"
+                          >
+                            <p className="font-medium">
+                              No transactions this month
+                            </p>
+                            <p className="text-xs">
+                              Records are generated automatically from completed
+                              transactions
+                            </p>
+                          </TableCell>
+                        </TableRow>
+                      )}
+                    </TableBody>
+                  </Table>
+                  <BkPagination
+                    page={dailyRecordsPage}
+                    setPage={setDailyRecordsPage}
+                    total={dailyRecordSummaries.length}
+                  />
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            {/* ── Monthly Records ── */}
+            <TabsContent value="monthly-records" className="space-y-3">
+              <div className="flex items-center justify-between">
+                <p className="text-sm text-muted-foreground">
+                  All-time transactions grouped by month.
+                </p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() =>
+                    exportCSV(
+                      monthlyRecordSummaries.map((r) => ({
+                        Period: r.label,
+                        "Gross Revenue": r.revenue.toFixed(2),
+                        VAT: r.vat.toFixed(2),
+                        "Net Revenue": r.net.toFixed(2),
+                        Cash: r.cash.toFixed(2),
+                        Card: r.card.toFixed(2),
+                        Transactions: r.txCount,
+                        Refunds: r.refundAmt.toFixed(2),
+                        "Refund Count": r.refundCount,
+                        "Discount Amount": r.discountAmt.toFixed(2),
+                        "Discount Count": r.discountCount,
+                        "Stock Loss": r.stockLoss.toFixed(2),
+                        "Net Profit": r.netProfit.toFixed(2),
+                      })),
+                      "monthly-records.csv",
+                    )
+                  }
+                >
+                  <Download className="h-4 w-4 mr-1" /> Export
+                </Button>
+              </div>
+
+              <Card>
+                <CardContent className="p-0">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Period</TableHead>
+                        <TableHead className="text-right">Tx</TableHead>
+                        <TableHead className="text-right">
+                          Gross Revenue
+                        </TableHead>
+                        <TableHead className="text-right">VAT</TableHead>
+                        <TableHead className="text-right">
+                          Net Revenue
+                        </TableHead>
+                        <TableHead className="text-right">Cash</TableHead>
+                        <TableHead className="text-right">Card</TableHead>
+                        <TableHead className="text-right">Refunds</TableHead>
+                        <TableHead className="text-right">Discounts</TableHead>
+                        <TableHead className="text-right">Stock Loss</TableHead>
+                        <TableHead className="text-right">Net Profit</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {pagedMonthlyRecords.map((r) => (
+                        <TableRow
+                          key={r.yearMonth}
+                          className="cursor-pointer hover:bg-muted/50 group"
+                        >
+                          <TableCell className="font-medium whitespace-nowrap">
+                            {r.label}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            {r.txCount}
+                          </TableCell>
+                          <TableCell className="text-right font-medium text-success">
+                            {fmt(r.revenue)}
+                          </TableCell>
+                          <TableCell className="text-right text-muted-foreground">
+                            {fmt(r.vat)}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            {fmt(r.net)}
+                          </TableCell>
+                          <TableCell className="text-right text-muted-foreground">
+                            {fmt(r.cash)}
+                          </TableCell>
+                          <TableCell className="text-right text-muted-foreground">
+                            {fmt(r.card)}
+                          </TableCell>
+                          <TableCell className="text-right text-destructive">
+                            {r.refundAmt > 0
+                              ? `${fmt(r.refundAmt)} (${r.refundCount})`
+                              : "—"}
+                          </TableCell>
+                          <TableCell className="text-right text-warning">
+                            {r.discountAmt > 0 ? fmt(r.discountAmt) : "—"}
+                          </TableCell>
+                          <TableCell className="text-right text-destructive">
+                            {r.stockLoss > 0 ? fmt(r.stockLoss) : "—"}
+                          </TableCell>
+                          <TableCell
+                            className={`text-right font-bold ${
+                              r.netProfit >= 0
+                                ? "text-success"
+                                : "text-destructive"
+                            }`}
+                          >
+                            {fmt(r.netProfit)}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                      {monthlyRecordSummaries.length === 0 && (
+                        <TableRow>
+                          <TableCell
+                            colSpan={12}
+                            className="text-center py-10 text-muted-foreground"
+                          >
+                            <p className="font-medium">
+                              No transaction data yet
+                            </p>
+                            <p className="text-xs">
+                              Records are generated automatically from completed
+                              transactions
+                            </p>
+                          </TableCell>
+                        </TableRow>
+                      )}
+                    </TableBody>
+                  </Table>
+                  <BkPagination
+                    page={monthlyRecordsPage}
+                    setPage={setMonthlyRecordsPage}
+                    total={monthlyRecordSummaries.length}
+                  />
+                </CardContent>
+              </Card>
+            </TabsContent>
+          </Tabs>
         </TabsContent>
 
         {/* ── Top Products ── */}
@@ -1373,282 +1680,38 @@ export default function Bookkeeping() {
           )}
         </TabsContent>
 
-        {/* ── Logs ── */}
+        {/* ── Logs (Shift Logs and Withdrawal Logs only) ── */}
         <TabsContent value="logs" className="space-y-4">
-          <Tabs defaultValue="daily-logs">
+          <Tabs defaultValue="shift-logs">
             <TabsList className="mb-4">
-              <TabsTrigger
-                value="daily-logs"
-                className="flex items-center gap-1.5"
-              >
-                <CalendarDays className="h-3.5 w-3.5" /> Daily Logs
-              </TabsTrigger>
-              <TabsTrigger
-                value="monthly-logs"
-                className="flex items-center gap-1.5"
-              >
-                <Layers className="h-3.5 w-3.5" /> Monthly Logs
-              </TabsTrigger>
               <TabsTrigger
                 value="shift-logs"
                 className="flex items-center gap-1.5"
               >
                 <Clock className="h-3.5 w-3.5" /> Shift Logs
               </TabsTrigger>
+              <TabsTrigger
+                value="withdrawal-logs"
+                className="flex items-center gap-1.5"
+              >
+                <PackageMinus className="h-3.5 w-3.5" /> Withdrawals
+                {withdrawalLogs && withdrawalLogs.length > 0 && (
+                  <Badge
+                    variant="secondary"
+                    className="ml-1 text-[10px] px-1.5 h-4"
+                  >
+                    {withdrawalLogs.length}
+                  </Badge>
+                )}
+              </TabsTrigger>
             </TabsList>
-
-            {/* ── Daily Logs ── */}
-            <TabsContent value="daily-logs" className="space-y-3">
-              <div className="flex items-center justify-between">
-                <p className="text-sm text-muted-foreground">
-                  Official daily closing records. Click any row to view the full
-                  summary.
-                </p>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() =>
-                    exportCSV(
-                      (dailyLogs || []).map((l) => ({
-                        Date: l.log_date,
-                        "Total Sales": l.total_sales,
-                        Transactions: l.transaction_count,
-                        VAT: l.vat_amount,
-                        Discounts: l.discount_amount,
-                        Refunds: l.refund_amount,
-                        "Cash Sales": l.cash_sales,
-                        "Card Sales": l.card_sales,
-                        "Stock Loss": l.stock_loss,
-                        "Net Profit": l.net_profit,
-                      })),
-                      "daily-logs.csv",
-                    )
-                  }
-                >
-                  <Download className="h-4 w-4 mr-1" /> Export
-                </Button>
-              </div>
-              <Card>
-                <CardContent className="p-0">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Date</TableHead>
-                        <TableHead className="text-right">Sales</TableHead>
-                        <TableHead className="text-right">Tx</TableHead>
-                        <TableHead className="text-right">Cash</TableHead>
-                        <TableHead className="text-right">Card</TableHead>
-                        <TableHead className="text-right">VAT</TableHead>
-                        <TableHead className="text-right">Refunds</TableHead>
-                        <TableHead className="text-right">Stock Loss</TableHead>
-                        <TableHead className="text-right">Net Profit</TableHead>
-                        <TableHead>Closed</TableHead>
-                        <TableHead />
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {(dailyLogs || []).map((log) => (
-                        <TableRow
-                          key={log.id}
-                          className="cursor-pointer hover:bg-muted/50 group"
-                          onClick={() => navigate(`/logs/${log.id}?type=daily`)}
-                        >
-                          <TableCell className="font-medium whitespace-nowrap">
-                            {format(new Date(log.log_date), "MMM d, yyyy")}
-                          </TableCell>
-                          <TableCell className="text-right text-success font-medium">
-                            {fmt(Number(log.total_sales))}
-                          </TableCell>
-                          <TableCell className="text-right">
-                            {log.transaction_count}
-                          </TableCell>
-                          <TableCell className="text-right">
-                            {fmt(Number(log.cash_sales))}
-                          </TableCell>
-                          <TableCell className="text-right">
-                            {fmt(Number(log.card_sales))}
-                          </TableCell>
-                          <TableCell className="text-right text-muted-foreground">
-                            {fmt(Number(log.vat_amount))}
-                          </TableCell>
-                          <TableCell className="text-right text-destructive">
-                            {Number(log.refund_amount) > 0
-                              ? fmt(Number(log.refund_amount))
-                              : "—"}
-                          </TableCell>
-                          <TableCell className="text-right text-destructive">
-                            {Number(log.stock_loss) > 0
-                              ? fmt(Number(log.stock_loss))
-                              : "—"}
-                          </TableCell>
-                          <TableCell
-                            className={`text-right font-bold ${Number(log.net_profit) >= 0 ? "text-success" : "text-destructive"}`}
-                          >
-                            {fmt(Number(log.net_profit))}
-                          </TableCell>
-                          <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
-                            {format(new Date(log.created_at), "h:mm a")}
-                          </TableCell>
-                          <TableCell>
-                            <ArrowRight className="h-4 w-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                      {(!dailyLogs || dailyLogs.length === 0) && (
-                        <TableRow>
-                          <TableCell
-                            colSpan={11}
-                            className="text-center py-10 text-muted-foreground"
-                          >
-                            <div className="space-y-1">
-                              <p className="font-medium">No daily logs yet</p>
-                              <p className="text-xs">
-                                Close the day from the sidebar to create the
-                                first official daily record
-                              </p>
-                            </div>
-                          </TableCell>
-                        </TableRow>
-                      )}
-                    </TableBody>
-                  </Table>
-                </CardContent>
-              </Card>
-            </TabsContent>
-
-            {/* ── Monthly Logs ── */}
-            <TabsContent value="monthly-logs" className="space-y-3">
-              <div className="flex items-center justify-between">
-                <p className="text-sm text-muted-foreground">
-                  Official monthly closing records. Click any row to view the
-                  full summary.
-                </p>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() =>
-                    exportCSV(
-                      (monthlyLogs || []).map((l) => ({
-                        Year: l.log_year,
-                        Month: l.log_month,
-                        "Total Sales": l.total_sales,
-                        Transactions: l.transaction_count,
-                        VAT: l.vat_amount,
-                        Discounts: l.discount_amount,
-                        Refunds: l.refund_amount,
-                        "Cash Sales": l.cash_sales,
-                        "Card Sales": l.card_sales,
-                        "Stock Loss": l.stock_loss,
-                        "Net Profit": l.net_profit,
-                      })),
-                      "monthly-logs.csv",
-                    )
-                  }
-                >
-                  <Download className="h-4 w-4 mr-1" /> Export
-                </Button>
-              </div>
-              <Card>
-                <CardContent className="p-0">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Period</TableHead>
-                        <TableHead className="text-right">Sales</TableHead>
-                        <TableHead className="text-right">Tx</TableHead>
-                        <TableHead className="text-right">Cash</TableHead>
-                        <TableHead className="text-right">Card</TableHead>
-                        <TableHead className="text-right">VAT</TableHead>
-                        <TableHead className="text-right">Refunds</TableHead>
-                        <TableHead className="text-right">Stock Loss</TableHead>
-                        <TableHead className="text-right">Net Profit</TableHead>
-                        <TableHead>Closed</TableHead>
-                        <TableHead />
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {(monthlyLogs || []).map((log) => (
-                        <TableRow
-                          key={log.id}
-                          className="cursor-pointer hover:bg-muted/50 group"
-                          onClick={() =>
-                            navigate(`/logs/${log.id}?type=monthly`)
-                          }
-                        >
-                          <TableCell className="font-medium whitespace-nowrap">
-                            {format(
-                              new Date(log.log_year, log.log_month - 1, 1),
-                              "MMMM yyyy",
-                            )}
-                          </TableCell>
-                          <TableCell className="text-right text-success font-medium">
-                            {fmt(Number(log.total_sales))}
-                          </TableCell>
-                          <TableCell className="text-right">
-                            {log.transaction_count}
-                          </TableCell>
-                          <TableCell className="text-right">
-                            {fmt(Number(log.cash_sales))}
-                          </TableCell>
-                          <TableCell className="text-right">
-                            {fmt(Number(log.card_sales))}
-                          </TableCell>
-                          <TableCell className="text-right text-muted-foreground">
-                            {fmt(Number(log.vat_amount))}
-                          </TableCell>
-                          <TableCell className="text-right text-destructive">
-                            {Number(log.refund_amount) > 0
-                              ? fmt(Number(log.refund_amount))
-                              : "—"}
-                          </TableCell>
-                          <TableCell className="text-right text-destructive">
-                            {Number(log.stock_loss) > 0
-                              ? fmt(Number(log.stock_loss))
-                              : "—"}
-                          </TableCell>
-                          <TableCell
-                            className={`text-right font-bold ${Number(log.net_profit) >= 0 ? "text-success" : "text-destructive"}`}
-                          >
-                            {fmt(Number(log.net_profit))}
-                          </TableCell>
-                          <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
-                            {format(new Date(log.created_at), "MMM d, h:mm a")}
-                          </TableCell>
-                          <TableCell>
-                            <ArrowRight className="h-4 w-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                      {(!monthlyLogs || monthlyLogs.length === 0) && (
-                        <TableRow>
-                          <TableCell
-                            colSpan={11}
-                            className="text-center py-10 text-muted-foreground"
-                          >
-                            <div className="space-y-1">
-                              <p className="font-medium">No monthly logs yet</p>
-                              <p className="text-xs">
-                                Close the month from the sidebar to create the
-                                first official monthly record
-                              </p>
-                            </div>
-                          </TableCell>
-                        </TableRow>
-                      )}
-                    </TableBody>
-                  </Table>
-                </CardContent>
-              </Card>
-            </TabsContent>
 
             {/* ── Shift Logs ── */}
             <TabsContent value="shift-logs" className="space-y-3">
-              <div className="flex items-center justify-between">
-                <p className="text-sm text-muted-foreground">
-                  Cashier shift records for {format(monthStart, "MMMM yyyy")} —
-                  click any row to view the full shift report.
-                </p>
-              </div>
+              <p className="text-sm text-muted-foreground">
+                Cashier shift records for {format(monthStart, "MMMM yyyy")} —
+                click any row to view the full shift report.
+              </p>
               <Card>
                 <CardContent className="p-0">
                   <Table>
@@ -1801,6 +1864,212 @@ export default function Bookkeeping() {
                 </CardContent>
               </Card>
             </TabsContent>
+
+            {/* ── Withdrawal Logs ── */}
+            <TabsContent value="withdrawal-logs" className="space-y-3">
+              <div className="flex items-center justify-between">
+                <p className="text-sm text-muted-foreground">
+                  Item withdrawals for {format(monthStart, "MMMM yyyy")} — owner
+                  use, staff use, and damage records.
+                </p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() =>
+                    exportCSV(
+                      (withdrawalLogs || []).map((w: any) => ({
+                        Date: format(
+                          new Date(w.created_at),
+                          "yyyy-MM-dd HH:mm",
+                        ),
+                        Product: (w.products as any)?.name || "—",
+                        Quantity: w.quantity,
+                        Unit: (w.products as any)?.unit || "—",
+                        Type: w.type,
+                        "Unit Cost": Number(w.unit_cost).toFixed(2),
+                        "Total Cost": Number(w.total_cost).toFixed(2),
+                        "Performed By": employeeMap?.[w.performed_by] || "—",
+                        Note: w.note || "",
+                      })),
+                      `withdrawals-${selectedMonth}.csv`,
+                    )
+                  }
+                >
+                  <Download className="h-4 w-4 mr-1" /> Export
+                </Button>
+              </div>
+
+              {/* Summary strip */}
+              {withdrawals.length > 0 && (
+                <div className="grid grid-cols-3 gap-3">
+                  {[
+                    {
+                      label: "Owner Use",
+                      count: withdrawalLogs.filter(
+                        (w: any) => w.type === "OWNER_WITHDRAWAL",
+                      ).length,
+                      loss: withdrawalLogs
+                        .filter((w: any) => w.type === "OWNER_WITHDRAWAL")
+                        .reduce(
+                          (s: number, w: any) => s + Number(w.total_cost),
+                          0,
+                        ),
+                      color: "text-blue-600",
+                    },
+                    {
+                      label: "Staff Use",
+                      count: withdrawalLogs.filter(
+                        (w: any) => w.type === "STAFF_WITHDRAWAL",
+                      ).length,
+                      loss: withdrawalLogs
+                        .filter((w: any) => w.type === "STAFF_WITHDRAWAL")
+                        .reduce(
+                          (s: number, w: any) => s + Number(w.total_cost),
+                          0,
+                        ),
+                      color: "text-amber-600",
+                    },
+                    {
+                      label: "Damage / Lost",
+                      count: withdrawalLogs.filter(
+                        (w: any) => w.type === "DAMAGE",
+                      ).length,
+                      loss: withdrawalLogs
+                        .filter((w: any) => w.type === "DAMAGE")
+                        .reduce(
+                          (s: number, w: any) => s + Number(w.total_cost),
+                          0,
+                        ),
+                      color: "text-destructive",
+                    },
+                  ].map((s) => (
+                    <div
+                      key={s.label}
+                      className="p-3 rounded-lg border bg-muted/30"
+                    >
+                      <p className="text-xs text-muted-foreground">{s.label}</p>
+                      <p className={`text-lg font-bold ${s.color}`}>
+                        {s.count} items
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        ₱
+                        {s.loss.toLocaleString("en-PH", {
+                          minimumFractionDigits: 2,
+                        })}{" "}
+                        cost
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <Card>
+                <CardContent className="p-0">
+                  {pagedWithdrawals.length === 0 ? (
+                    <div className="text-center py-10 text-muted-foreground">
+                      <PackageMinus className="h-8 w-8 mx-auto mb-2 opacity-30" />
+                      <p className="font-medium text-sm">
+                        No withdrawals this month
+                      </p>
+                      <p className="text-xs mt-1">
+                        Use "Withdraw Item" in the Inventory page to log
+                        withdrawals
+                      </p>
+                    </div>
+                  ) : (
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Date & Time</TableHead>
+                          <TableHead>Product</TableHead>
+                          <TableHead className="text-right">Qty</TableHead>
+                          <TableHead>Type</TableHead>
+                          <TableHead>Performed By</TableHead>
+                          <TableHead className="text-right">
+                            Unit Cost
+                          </TableHead>
+                          <TableHead className="text-right">
+                            Total Loss
+                          </TableHead>
+                          <TableHead>Note</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {pagedWithdrawals.map((w: any) => {
+                          const typeConfig = {
+                            OWNER_WITHDRAWAL: {
+                              label: "Owner Use",
+                              class:
+                                "bg-blue-500/10 text-blue-700 dark:text-blue-400 border-blue-500/20",
+                            },
+                            STAFF_WITHDRAWAL: {
+                              label: "Staff Use",
+                              class:
+                                "bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/20",
+                            },
+                            DAMAGE: {
+                              label: "Damage",
+                              class:
+                                "bg-destructive/10 text-destructive border-destructive/20",
+                            },
+                          }[w.type as string] ?? { label: w.type, class: "" };
+
+                          return (
+                            <TableRow key={w.id}>
+                              <TableCell className="text-xs whitespace-nowrap">
+                                {format(
+                                  new Date(w.created_at),
+                                  "MMM d, h:mm a",
+                                )}
+                              </TableCell>
+                              <TableCell className="font-medium text-sm">
+                                {(w.products as any)?.name || "—"}
+                                {(w.products as any)?.unit && (
+                                  <span className="text-xs text-muted-foreground ml-1">
+                                    ({(w.products as any).unit})
+                                  </span>
+                                )}
+                              </TableCell>
+                              <TableCell className="text-right font-medium">
+                                {w.quantity}
+                              </TableCell>
+                              <TableCell>
+                                <Badge
+                                  className={`text-xs border ${typeConfig.class}`}
+                                >
+                                  {typeConfig.label}
+                                </Badge>
+                              </TableCell>
+                              <TableCell className="text-sm">
+                                {employeeMap?.[w.performed_by] || "—"}
+                              </TableCell>
+                              <TableCell className="text-right text-muted-foreground text-sm">
+                                {Number(w.unit_cost) > 0
+                                  ? `₱${Number(w.unit_cost).toFixed(2)}`
+                                  : "—"}
+                              </TableCell>
+                              <TableCell className="text-right font-medium text-destructive">
+                                {Number(w.total_cost) > 0
+                                  ? `₱${Number(w.total_cost).toLocaleString("en-PH", { minimumFractionDigits: 2 })}`
+                                  : "—"}
+                              </TableCell>
+                              <TableCell className="text-xs text-muted-foreground max-w-35 truncate">
+                                {w.note || "—"}
+                              </TableCell>
+                            </TableRow>
+                          );
+                        })}
+                      </TableBody>
+                    </Table>
+                  )}
+                  <BkPagination
+                    page={withdrawalPage}
+                    setPage={setWithdrawalPage}
+                    total={withdrawalLogs?.length || 0}
+                  />
+                </CardContent>
+              </Card>
+            </TabsContent>
           </Tabs>
         </TabsContent>
       </Tabs>
@@ -1815,7 +2084,7 @@ export default function Bookkeeping() {
   );
 }
 
-// ── DailyDetailDialog (unchanged) ─────────────────────────────────────────────
+// ── DailyDetailDialog ─────────────────────────────────────────────────────────
 function DailyDetailDialog({
   date,
   onClose,
@@ -2090,7 +2359,7 @@ function DailyDetailDialog({
   );
 }
 
-// ── FinancialSummaryTab (unchanged from original) ─────────────────────────────
+// ── FinancialSummaryTab ───────────────────────────────────────────────────────
 function FinancialSummaryTab({
   monthStart,
   monthTx,

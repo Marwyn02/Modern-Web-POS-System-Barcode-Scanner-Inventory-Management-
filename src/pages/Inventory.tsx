@@ -8,6 +8,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -51,6 +52,10 @@ import {
   Tag,
   ChevronLeft,
   ChevronRight,
+  PackageMinus,
+  User,
+  Wrench,
+  ShieldAlert,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useUserRole } from "@/hooks/useUserRole";
@@ -58,8 +63,39 @@ import { subDays, differenceInDays, format } from "date-fns";
 
 type SortKey = "name" | "price" | "stock_quantity";
 type SortDir = "asc" | "desc";
+type WithdrawalType = "OWNER_WITHDRAWAL" | "STAFF_WITHDRAWAL" | "DAMAGE";
 
 const ITEMS_PER_PAGE = 20;
+
+const WITHDRAWAL_TYPES: {
+  value: WithdrawalType;
+  label: string;
+  description: string;
+  icon: React.ReactNode;
+  color: string;
+}[] = [
+  {
+    value: "OWNER_WITHDRAWAL",
+    label: "Owner Use",
+    description: "Owner taking items for personal use",
+    icon: <User className="h-3.5 w-3.5" />,
+    color: "text-blue-600",
+  },
+  {
+    value: "STAFF_WITHDRAWAL",
+    label: "Staff Use",
+    description: "Staff taking items for store operations",
+    icon: <Wrench className="h-3.5 w-3.5" />,
+    color: "text-amber-600",
+  },
+  {
+    value: "DAMAGE",
+    label: "Damaged / Lost",
+    description: "Items damaged, broken, or lost",
+    icon: <ShieldAlert className="h-3.5 w-3.5" />,
+    color: "text-destructive",
+  },
+];
 
 const getExpiryZone = (expiryDate: string | null) => {
   if (!expiryDate) return "none";
@@ -70,6 +106,313 @@ const getExpiryZone = (expiryDate: string | null) => {
   return "good";
 };
 
+// ── Withdraw Item Dialog (defined outside to prevent focus loss) ──────────────
+interface WithdrawDialogProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  products: any[];
+  onSuccess: () => void;
+}
+
+function WithdrawItemDialog({
+  open,
+  onOpenChange,
+  products,
+  onSuccess,
+}: WithdrawDialogProps) {
+  const [search, setSearch] = useState("");
+  const [selectedProduct, setSelectedProduct] = useState<any>(null);
+  const [quantity, setQuantity] = useState("");
+  const [type, setType] = useState<WithdrawalType>("OWNER_WITHDRAWAL");
+  const [note, setNote] = useState("");
+  const queryClient = useQueryClient();
+
+  const filteredProducts = (products || []).filter((p) =>
+    p.name.toLowerCase().includes(search.toLowerCase()),
+  );
+
+  const reset = () => {
+    setSearch("");
+    setSelectedProduct(null);
+    setQuantity("");
+    setType("OWNER_WITHDRAWAL");
+    setNote("");
+  };
+
+  const withdrawMutation = useMutation({
+    mutationFn: async () => {
+      if (!selectedProduct) throw new Error("Select a product");
+      const qty = parseInt(quantity);
+      if (!qty || qty <= 0) throw new Error("Enter a valid quantity");
+      if (qty > selectedProduct.stock_quantity)
+        throw new Error(
+          `Only ${selectedProduct.stock_quantity} units available`,
+        );
+
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      const unitCost = Number(
+        selectedProduct.cost_price || selectedProduct.price || 0,
+      );
+      const totalCost = unitCost * qty;
+
+      // 1. Record the withdrawal
+      const { error: wErr } = await supabase.from("item_withdrawals").insert({
+        product_id: selectedProduct.id,
+        quantity: qty,
+        type,
+        note: note.trim() || null,
+        unit_cost: unitCost,
+        total_cost: totalCost,
+        performed_by: user?.id || null,
+      });
+      if (wErr) throw wErr;
+
+      // 2. Deduct from stock
+      const { error: sErr } = await supabase
+        .from("products")
+        .update({
+          stock_quantity: selectedProduct.stock_quantity - qty,
+        })
+        .eq("id", selectedProduct.id);
+      if (sErr) throw sErr;
+    },
+    onSuccess: () => {
+      const typeLabel =
+        WITHDRAWAL_TYPES.find((t) => t.value === type)?.label ?? type;
+      toast.success(
+        `${quantity} × ${selectedProduct?.name} withdrawn (${typeLabel})`,
+      );
+      queryClient.invalidateQueries({ queryKey: ["inventory-products"] });
+      queryClient.invalidateQueries({ queryKey: ["sales-products"] });
+      onSuccess();
+      onOpenChange(false);
+      reset();
+    },
+    onError: (e: any) => toast.error(e.message),
+  });
+
+  const selectedType = WITHDRAWAL_TYPES.find((t) => t.value === type)!;
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(o) => {
+        onOpenChange(o);
+        if (!o) reset();
+      }}
+    >
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <PackageMinus className="h-4 w-4" /> Withdraw Item
+          </DialogTitle>
+        </DialogHeader>
+
+        <div className="space-y-4">
+          {/* Step 1 — Product */}
+          <div className="space-y-2">
+            <Label>Product *</Label>
+            {selectedProduct ? (
+              <div className="flex items-center justify-between p-3 rounded-lg border bg-muted/30">
+                <div>
+                  <p className="text-sm font-medium">{selectedProduct.name}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {selectedProduct.stock_quantity} in stock ·{" "}
+                    {selectedProduct.unit || "piece"}
+                  </p>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-xs h-7"
+                  onClick={() => {
+                    setSelectedProduct(null);
+                    setQuantity("");
+                    setSearch("");
+                  }}
+                >
+                  Change
+                </Button>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+                  <Input
+                    placeholder="Search product..."
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    className="pl-9 text-sm"
+                    autoFocus
+                  />
+                </div>
+                {search.length > 0 && (
+                  <div className="border rounded-lg overflow-hidden max-h-48 overflow-y-auto">
+                    {filteredProducts.length === 0 ? (
+                      <p className="text-sm text-muted-foreground text-center py-4">
+                        No products found
+                      </p>
+                    ) : (
+                      filteredProducts.slice(0, 20).map((p) => (
+                        <button
+                          key={p.id}
+                          className="w-full text-left px-3 py-2.5 text-sm hover:bg-muted/50 border-b last:border-0 flex items-center justify-between"
+                          onClick={() => {
+                            setSelectedProduct(p);
+                            setSearch("");
+                          }}
+                        >
+                          <span className="font-medium truncate flex-1">
+                            {p.name}
+                          </span>
+                          <span className="text-xs text-muted-foreground ml-2 shrink-0">
+                            {p.stock_quantity} left
+                          </span>
+                        </button>
+                      ))
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Step 2 — Type */}
+          <div className="space-y-2">
+            <Label>Withdrawal Type *</Label>
+            <div className="grid grid-cols-3 gap-2">
+              {WITHDRAWAL_TYPES.map((t) => (
+                <button
+                  key={t.value}
+                  onClick={() => setType(t.value)}
+                  className={`p-2.5 rounded-lg border text-left transition-colors ${
+                    type === t.value
+                      ? "border-primary bg-primary/5"
+                      : "border-border hover:bg-muted/40"
+                  }`}
+                >
+                  <div className={`mb-1 ${t.color}`}>{t.icon}</div>
+                  <p className="text-xs font-medium leading-tight">{t.label}</p>
+                </button>
+              ))}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {selectedType.description}
+            </p>
+          </div>
+
+          {/* Step 3 — Quantity */}
+          <div className="space-y-2">
+            <Label>
+              Quantity *
+              {selectedProduct && (
+                <span className="text-muted-foreground font-normal ml-1">
+                  (max {selectedProduct.stock_quantity})
+                </span>
+              )}
+            </Label>
+            <Input
+              type="number"
+              min="1"
+              max={selectedProduct?.stock_quantity}
+              placeholder="0"
+              value={quantity}
+              onChange={(e) => setQuantity(e.target.value)}
+            />
+            {/* Stock impact preview */}
+            {selectedProduct && quantity && parseInt(quantity) > 0 && (
+              <div
+                className={`flex items-center justify-between text-xs px-2 py-1.5 rounded-md ${
+                  parseInt(quantity) > selectedProduct.stock_quantity
+                    ? "bg-destructive/10 text-destructive"
+                    : "bg-muted/40"
+                }`}
+              >
+                <span className="text-muted-foreground">Stock after:</span>
+                <span className="font-medium">
+                  {parseInt(quantity) > selectedProduct.stock_quantity
+                    ? "⚠ Exceeds stock"
+                    : `${selectedProduct.stock_quantity} → ${selectedProduct.stock_quantity - parseInt(quantity)}`}
+                </span>
+              </div>
+            )}
+          </div>
+
+          {/* Step 4 — Note */}
+          <div className="space-y-2">
+            <Label>Note (optional)</Label>
+            <Textarea
+              placeholder={
+                type === "OWNER_WITHDRAWAL"
+                  ? "e.g. Owner personal use"
+                  : type === "STAFF_WITHDRAWAL"
+                    ? "e.g. Store cleaning supplies"
+                    : "e.g. Dropped and broken during stocking"
+              }
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              rows={2}
+              className="resize-none text-sm"
+            />
+          </div>
+
+          {/* Cost preview */}
+          {selectedProduct &&
+            quantity &&
+            parseInt(quantity) > 0 &&
+            parseInt(quantity) <= selectedProduct.stock_quantity && (
+              <div className="rounded-lg border bg-muted/20 px-3 py-2 flex items-center justify-between text-xs">
+                <span className="text-muted-foreground">
+                  Inventory loss (at cost):
+                </span>
+                <span className="font-semibold text-destructive">
+                  ₱
+                  {(
+                    Number(
+                      selectedProduct.cost_price || selectedProduct.price || 0,
+                    ) * parseInt(quantity)
+                  ).toLocaleString("en-PH", { minimumFractionDigits: 2 })}
+                </span>
+              </div>
+            )}
+
+          {/* Actions */}
+          <div className="flex gap-2 pt-1">
+            <Button
+              variant="outline"
+              className="flex-1"
+              onClick={() => {
+                onOpenChange(false);
+                reset();
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              className="flex-1"
+              disabled={
+                !selectedProduct ||
+                !quantity ||
+                parseInt(quantity) <= 0 ||
+                parseInt(quantity) > (selectedProduct?.stock_quantity || 0) ||
+                withdrawMutation.isPending
+              }
+              onClick={() => withdrawMutation.mutate()}
+            >
+              <PackageMinus className="h-3.5 w-3.5 mr-1.5" />
+              {withdrawMutation.isPending ? "Saving…" : "Confirm Withdrawal"}
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ── Main Inventory Page ───────────────────────────────────────────────────────
 export default function Inventory() {
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("all");
@@ -90,11 +433,11 @@ export default function Inventory() {
     name: string;
     qty: number;
   } | null>(null);
+  const [withdrawOpen, setWithdrawOpen] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const queryClient = useQueryClient();
   const { canManageInventory, isAdmin } = useUserRole();
 
-  // Reset page whenever filters/search/sort changes
   useEffect(() => {
     setCurrentPage(1);
   }, [search, categoryFilter, stockFilter, expiryFilter, sortKey, sortDir]);
@@ -315,7 +658,6 @@ export default function Inventory() {
       qty: number;
       costPrice: number;
     }) => {
-      // Record disposal
       const { error: dispErr } = await supabase.from("disposed_items").insert({
         product_id: id,
         quantity: qty,
@@ -324,7 +666,6 @@ export default function Inventory() {
         total_loss: costPrice * qty,
       });
       if (dispErr) throw dispErr;
-      // Deduct stock
       const { data: product } = await supabase
         .from("products")
         .select("stock_quantity")
@@ -402,7 +743,8 @@ export default function Inventory() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      {/* Header */}
+      <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Inventory</h1>
           <p className="text-muted-foreground">
@@ -410,171 +752,182 @@ export default function Inventory() {
             {totalPages > 1 && ` — page ${currentPage} of ${totalPages}`}
           </p>
         </div>
-        {canManageInventory && (
-          <Dialog
-            open={dialogOpen}
-            onOpenChange={(open) => {
-              setDialogOpen(open);
-              if (!open) resetForm();
-            }}
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* Withdraw Item button — available to all authenticated users */}
+          <Button
+            variant="outline"
+            onClick={() => setWithdrawOpen(true)}
+            className="border-amber-500/30 text-amber-600 hover:bg-amber-100 hover:text-amber-600 dark:hover:bg-amber-950/20"
           >
-            <DialogTrigger asChild>
-              <Button>
-                <Plus className="h-4 w-4 mr-2" /> Add Product
-              </Button>
-            </DialogTrigger>
-            <DialogContent>
-              <DialogHeader>
-                <DialogTitle>
-                  {editingProduct ? "Edit Product" : "Add Product"}
-                </DialogTitle>
-              </DialogHeader>
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  saveMutation.mutate();
-                }}
-                className="space-y-4"
-              >
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="col-span-2 space-y-2">
-                    <Label>Name *</Label>
-                    <Input
-                      value={form.name}
-                      onChange={(e) =>
-                        setForm({ ...form, name: e.target.value })
-                      }
-                      required
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>SKU</Label>
-                    <Input
-                      value={form.sku}
-                      onChange={(e) =>
-                        setForm({ ...form, sku: e.target.value })
-                      }
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Barcode</Label>
-                    <Input
-                      value={form.barcode}
-                      onChange={(e) =>
-                        setForm({ ...form, barcode: e.target.value })
-                      }
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Price *</Label>
-                    <Input
-                      type="number"
-                      step="0.01"
-                      value={form.price}
-                      onChange={(e) =>
-                        setForm({ ...form, price: e.target.value })
-                      }
-                      required
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Cost Price</Label>
-                    <Input
-                      type="number"
-                      step="0.01"
-                      value={form.cost_price}
-                      onChange={(e) =>
-                        setForm({ ...form, cost_price: e.target.value })
-                      }
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Stock Qty *</Label>
-                    <Input
-                      type="number"
-                      value={form.stock_quantity}
-                      onChange={(e) =>
-                        setForm({ ...form, stock_quantity: e.target.value })
-                      }
-                      required
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Low Stock Alert</Label>
-                    <Input
-                      type="number"
-                      value={form.low_stock_threshold}
-                      onChange={(e) =>
-                        setForm({
-                          ...form,
-                          low_stock_threshold: e.target.value,
-                        })
-                      }
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Expiry Date</Label>
-                    <Input
-                      type="date"
-                      value={form.expiry_date}
-                      onChange={(e) =>
-                        setForm({ ...form, expiry_date: e.target.value })
-                      }
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Category</Label>
-                    <Select
-                      value={form.category_id}
-                      onValueChange={(v) =>
-                        setForm({ ...form, category_id: v })
-                      }
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {categories?.map((c) => (
-                          <SelectItem key={c.id} value={c.id}>
-                            {c.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Unit</Label>
-                    <Select
-                      value={form.unit}
-                      onValueChange={(v) => setForm({ ...form, unit: v })}
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="piece">Piece</SelectItem>
-                        <SelectItem value="kg">Kilogram</SelectItem>
-                        <SelectItem value="liter">Liter</SelectItem>
-                        <SelectItem value="pack">Pack</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-                <Button
-                  type="submit"
-                  className="w-full"
-                  disabled={saveMutation.isPending}
-                >
-                  {saveMutation.isPending
-                    ? "Saving..."
-                    : editingProduct
-                      ? "Update Product"
-                      : "Add Product"}
+            <PackageMinus className="h-4 w-4 mr-2" /> Withdraw Item
+          </Button>
+
+          {canManageInventory && (
+            <Dialog
+              open={dialogOpen}
+              onOpenChange={(open) => {
+                setDialogOpen(open);
+                if (!open) resetForm();
+              }}
+            >
+              <DialogTrigger asChild>
+                <Button className="hover:bg-slate-900 hover:text-white hover:border-white">
+                  <Plus className="h-4 w-4 mr-2" /> Add Product
                 </Button>
-              </form>
-            </DialogContent>
-          </Dialog>
-        )}
+              </DialogTrigger>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>
+                    {editingProduct ? "Edit Product" : "Add Product"}
+                  </DialogTitle>
+                </DialogHeader>
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    saveMutation.mutate();
+                  }}
+                  className="space-y-4"
+                >
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="col-span-2 space-y-2">
+                      <Label>Name *</Label>
+                      <Input
+                        value={form.name}
+                        onChange={(e) =>
+                          setForm({ ...form, name: e.target.value })
+                        }
+                        required
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>SKU</Label>
+                      <Input
+                        value={form.sku}
+                        onChange={(e) =>
+                          setForm({ ...form, sku: e.target.value })
+                        }
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Barcode</Label>
+                      <Input
+                        value={form.barcode}
+                        onChange={(e) =>
+                          setForm({ ...form, barcode: e.target.value })
+                        }
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Price *</Label>
+                      <Input
+                        type="number"
+                        step="0.01"
+                        value={form.price}
+                        onChange={(e) =>
+                          setForm({ ...form, price: e.target.value })
+                        }
+                        required
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Cost Price</Label>
+                      <Input
+                        type="number"
+                        step="0.01"
+                        value={form.cost_price}
+                        onChange={(e) =>
+                          setForm({ ...form, cost_price: e.target.value })
+                        }
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Stock Qty *</Label>
+                      <Input
+                        type="number"
+                        value={form.stock_quantity}
+                        onChange={(e) =>
+                          setForm({ ...form, stock_quantity: e.target.value })
+                        }
+                        required
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Low Stock Alert</Label>
+                      <Input
+                        type="number"
+                        value={form.low_stock_threshold}
+                        onChange={(e) =>
+                          setForm({
+                            ...form,
+                            low_stock_threshold: e.target.value,
+                          })
+                        }
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Expiry Date</Label>
+                      <Input
+                        type="date"
+                        value={form.expiry_date}
+                        onChange={(e) =>
+                          setForm({ ...form, expiry_date: e.target.value })
+                        }
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Category</Label>
+                      <Select
+                        value={form.category_id}
+                        onValueChange={(v) =>
+                          setForm({ ...form, category_id: v })
+                        }
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {categories?.map((c) => (
+                            <SelectItem key={c.id} value={c.id}>
+                              {c.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Unit</Label>
+                      <Select
+                        value={form.unit}
+                        onValueChange={(v) => setForm({ ...form, unit: v })}
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="piece">Piece</SelectItem>
+                          <SelectItem value="kg">Kilogram</SelectItem>
+                          <SelectItem value="liter">Liter</SelectItem>
+                          <SelectItem value="pack">Pack</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                  <Button
+                    type="submit"
+                    className="w-full hover:bg-amber-50 hover:text-amber-600 hover:border-amber-600"
+                    disabled={saveMutation.isPending}
+                  >
+                    {saveMutation.isPending
+                      ? "Saving..."
+                      : editingProduct
+                        ? "Update Product"
+                        : "Add Product"}
+                  </Button>
+                </form>
+              </DialogContent>
+            </Dialog>
+          )}
+        </div>
       </div>
 
       {/* Filters */}
@@ -793,7 +1146,6 @@ export default function Inventory() {
             >
               <ChevronLeft className="h-4 w-4" />
             </Button>
-
             {Array.from({ length: totalPages }, (_, i) => i + 1)
               .filter(
                 (p) =>
@@ -825,7 +1177,6 @@ export default function Inventory() {
                   </Button>
                 ),
               )}
-
             <Button
               variant="outline"
               size="icon"
@@ -838,6 +1189,16 @@ export default function Inventory() {
           </div>
         </div>
       )}
+
+      {/* Withdraw Item Dialog */}
+      <WithdrawItemDialog
+        open={withdrawOpen}
+        onOpenChange={setWithdrawOpen}
+        products={products || []}
+        onSuccess={() =>
+          queryClient.invalidateQueries({ queryKey: ["inventory-products"] })
+        }
+      />
 
       {/* Delete Confirmation */}
       <AlertDialog

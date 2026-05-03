@@ -15,8 +15,6 @@ import {
   DollarSign,
   ArrowDownCircle,
   ArrowUpCircle,
-  Sun,
-  Moon,
   ChevronDown,
   ChevronUp,
 } from "lucide-react";
@@ -55,8 +53,6 @@ import { toast } from "sonner";
 import { useNavigate } from "react-router-dom";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
-type DayStatus = "closed" | "open" | null;
-
 type CashboxForm = {
   type: "cash_in" | "cash_out";
   amount: string;
@@ -64,98 +60,97 @@ type CashboxForm = {
 };
 
 // ── Countdown Button ──────────────────────────────────────────────────────────
-function CountdownConfirmButton({
-  label,
-  pendingLabel,
-  onConfirm,
-  isPending,
-  variant = "default",
-  seconds = 10,
-}: {
-  label: string;
-  pendingLabel: string;
-  onConfirm: () => void;
-  isPending: boolean;
-  variant?: "default" | "destructive" | "success";
-  seconds?: number;
-}) {
-  const [countdown, setCountdown] = useState(seconds);
-  const [ready, setReady] = useState(false);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+// function CountdownConfirmButton({
+//   label,
+//   pendingLabel,
+//   onConfirm,
+//   isPending,
+//   variant = "default",
+//   seconds = 10,
+// }: {
+//   label: string;
+//   pendingLabel: string;
+//   onConfirm: () => void;
+//   isPending: boolean;
+//   variant?: "default" | "destructive" | "success";
+//   seconds?: number;
+// }) {
+//   const [countdown, setCountdown] = useState(seconds);
+//   const [ready, setReady] = useState(false);
+//   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  useEffect(() => {
-    setCountdown(seconds);
-    setReady(false);
-    intervalRef.current = setInterval(() => {
-      setCountdown((prev) => {
-        if (prev <= 1) {
-          clearInterval(intervalRef.current!);
-          setReady(true);
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-    return () => clearInterval(intervalRef.current!);
-  }, [seconds]);
+//   useEffect(() => {
+//     setCountdown(seconds);
+//     setReady(false);
+//     intervalRef.current = setInterval(() => {
+//       setCountdown((prev) => {
+//         if (prev <= 1) {
+//           clearInterval(intervalRef.current!);
+//           setReady(true);
+//           return 0;
+//         }
+//         return prev - 1;
+//       });
+//     }, 1000);
+//     return () => clearInterval(intervalRef.current!);
+//   }, [seconds]);
 
-  const bgClass =
-    variant === "destructive"
-      ? "bg-destructive hover:bg-destructive/90 text-destructive-foreground"
-      : variant === "success"
-        ? "bg-emerald-600 hover:bg-emerald-700 text-white"
-        : "bg-primary hover:bg-primary/90 text-primary-foreground";
+//   const bgClass =
+//     variant === "destructive"
+//       ? "bg-destructive hover:bg-destructive/90 text-destructive-foreground"
+//       : variant === "success"
+//         ? "bg-emerald-600 hover:bg-emerald-700 text-white"
+//         : "bg-primary hover:bg-primary/90 text-primary-foreground";
 
-  return (
-    <div className="space-y-2">
-      {!ready && (
-        <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-muted/50 border border-border">
-          <div className="relative h-7 w-7 shrink-0">
-            <svg className="h-7 w-7 -rotate-90" viewBox="0 0 28 28">
-              <circle
-                cx="14"
-                cy="14"
-                r="11"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2.5"
-                className="text-muted-foreground/20"
-              />
-              <circle
-                cx="14"
-                cy="14"
-                r="11"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2.5"
-                strokeDasharray={`${2 * Math.PI * 11}`}
-                strokeDashoffset={`${2 * Math.PI * 11 * (1 - countdown / seconds)}`}
-                strokeLinecap="round"
-                className="text-primary transition-all duration-1000"
-              />
-            </svg>
-            <span className="absolute inset-0 flex items-center justify-center text-[10px] font-bold text-foreground">
-              {countdown}
-            </span>
-          </div>
-          <p className="text-xs text-muted-foreground leading-tight">
-            Please review the details above before confirming.
-          </p>
-        </div>
-      )}
-      <Button
-        className={`w-full ${bgClass} transition-all`}
-        disabled={!ready || isPending}
-        onClick={onConfirm}
-      >
-        {isPending ? pendingLabel : ready ? label : `Wait ${countdown}s…`}
-      </Button>
-    </div>
-  );
-}
+//   return (
+//     <div className="space-y-2">
+//       {!ready && (
+//         <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-muted/50 border border-border">
+//           <div className="relative h-7 w-7 shrink-0">
+//             <svg className="h-7 w-7 -rotate-90" viewBox="0 0 28 28">
+//               <circle
+//                 cx="14"
+//                 cy="14"
+//                 r="11"
+//                 fill="none"
+//                 stroke="currentColor"
+//                 strokeWidth="2.5"
+//                 className="text-muted-foreground/20"
+//               />
+//               <circle
+//                 cx="14"
+//                 cy="14"
+//                 r="11"
+//                 fill="none"
+//                 stroke="currentColor"
+//                 strokeWidth="2.5"
+//                 strokeDasharray={`${2 * Math.PI * 11}`}
+//                 strokeDashoffset={`${2 * Math.PI * 11 * (1 - countdown / seconds)}`}
+//                 strokeLinecap="round"
+//                 className="text-primary transition-all duration-1000"
+//               />
+//             </svg>
+//             <span className="absolute inset-0 flex items-center justify-center text-[10px] font-bold text-foreground">
+//               {countdown}
+//             </span>
+//           </div>
+//           <p className="text-xs text-muted-foreground leading-tight">
+//             Please review the details above before confirming.
+//           </p>
+//         </div>
+//       )}
+//       <Button
+//         className={`w-full ${bgClass} transition-all`}
+//         disabled={!ready || isPending}
+//         onClick={onConfirm}
+//       >
+//         {isPending ? pendingLabel : ready ? label : `Wait ${countdown}s…`}
+//       </Button>
+//     </div>
+//   );
+// }
 
 // ── Inline Panel ──────────────────────────────────────────────────────────────
-// Replaces Popover — renders content inline below the trigger button
 function InlinePanel({
   open,
   children,
@@ -190,10 +185,6 @@ export function AppSidebar() {
     amount: "",
     reason: "",
   });
-
-  const [startDayOpen, setStartDayOpen] = useState(false);
-  const [endDayOpen, setEndDayOpen] = useState(false);
-  const [dayNotes, setDayNotes] = useState("");
 
   const {
     isAdmin,
@@ -264,7 +255,7 @@ export function AppSidebar() {
   });
 
   const todayStr = format(new Date(), "yyyy-MM-dd");
-  const { data: todayDayLog, refetch: refetchDayLog } = useQuery({
+  const { data: todayDayLog } = useQuery({
     queryKey: ["sidebar-day-log", todayStr],
     queryFn: async () => {
       const { data } = await supabase
@@ -276,27 +267,21 @@ export function AppSidebar() {
     },
   });
 
-  const { data: anyActiveShift } = useQuery({
-    queryKey: ["sidebar-any-active-shift"],
-    queryFn: async () => {
-      const { data } = await supabase
-        .from("shifts")
-        .select("id, employees(name)")
-        .is("clock_out", null)
-        .limit(5);
-      return data || [];
-    },
-    refetchInterval: 30_000,
-  });
+  // ── Close-day mutation (auto only) ────────────────────────────────────────
+  const closeDayMutation = useMutation({
+    mutationFn: async ({
+      dateStr,
+      notes,
+    }: {
+      dateStr: string;
+      notes?: string;
+    }) => {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      const start = startOfDay(new Date(dateStr)).toISOString();
+      const end = endOfDay(new Date(dateStr)).toISOString();
 
-  const dayStatus: DayStatus = todayDayLog ? "closed" : "open";
-
-  const { data: todayTxSummary } = useQuery({
-    queryKey: ["sidebar-today-summary"],
-    enabled: endDayOpen,
-    queryFn: async () => {
-      const start = startOfDay(new Date()).toISOString();
-      const end = endOfDay(new Date()).toISOString();
       const [{ data: completed }, { data: refunded }, { data: disposed }] =
         await Promise.all([
           supabase
@@ -351,23 +336,82 @@ export function AppSidebar() {
       );
       const netProfit = revenue - vat - refundTotal + refundVat - stockLoss;
 
-      return {
-        revenue,
-        vat,
-        cash,
-        card,
-        discounts,
-        refundTotal,
-        refundVat,
-        stockLoss,
-        netProfit,
-        txCount: (completed || []).length,
-        refundCount: (refunded || []).length,
-        cardSales: card,
-        cashSales: cash,
-      };
+      const { error } = await supabase.from("daily_logs").upsert(
+        {
+          log_date: dateStr,
+          total_sales: parseFloat(revenue.toFixed(2)),
+          transaction_count: (completed || []).length,
+          vat_amount: parseFloat(vat.toFixed(2)),
+          discount_amount: parseFloat(discounts.toFixed(2)),
+          refund_amount: parseFloat(refundTotal.toFixed(2)),
+          refund_count: (refunded || []).length,
+          cash_sales: parseFloat(cash.toFixed(2)),
+          card_sales: parseFloat(card.toFixed(2)),
+          stock_loss: parseFloat(stockLoss.toFixed(2)),
+          net_profit: parseFloat(netProfit.toFixed(2)),
+          closed_by: user?.id || null,
+          notes: notes ?? null,
+        },
+        { onConflict: "log_date" },
+      );
+      if (error) throw error;
     },
+    onSuccess: (_data, variables) => {
+      toast.success("Previous day auto-closed. Daily summary saved.", {
+        description: `Day: ${variables.dateStr}`,
+      });
+      queryClient.invalidateQueries({ queryKey: ["sidebar-day-log"] });
+      queryClient.invalidateQueries({ queryKey: ["bk-daily-logs"] });
+    },
+    onError: (e: any) => toast.error(e.message),
   });
+
+  // ── Auto-close: at 2AM nightly OR on morning open (5AM–11AM) ─────────────
+  const morningAutoCloseFired = useRef(false);
+
+  useEffect(() => {
+    const checkAutoClose = () => {
+      const now = new Date();
+      const h = now.getHours();
+      const m = now.getMinutes();
+      if (h === 2 && !todayDayLog) {
+        const prevDate = format(
+          new Date(now.getTime() - 86400000),
+          "yyyy-MM-dd",
+        );
+        closeDayMutation.mutate({
+          dateStr: prevDate,
+          notes: `[Auto-closed at 2:${String(m).padStart(2, "0")} AM]`,
+        });
+      }
+    };
+    const interval = setInterval(checkAutoClose, 60_000);
+    return () => clearInterval(interval);
+  }, [closeDayMutation, todayDayLog]);
+
+  useEffect(() => {
+    if (morningAutoCloseFired.current) return;
+    const now = new Date();
+    const h = now.getHours();
+    if (h >= 5 && h < 11) {
+      const prevDate = format(new Date(now.getTime() - 86400000), "yyyy-MM-dd");
+      supabase
+        .from("daily_logs")
+        .select("id")
+        .eq("log_date", prevDate)
+        .maybeSingle()
+        .then(({ data }) => {
+          if (!data) {
+            morningAutoCloseFired.current = true;
+            closeDayMutation.mutate({
+              dateStr: prevDate,
+              notes: `[Auto-closed on morning open at ${h}:${String(now.getMinutes()).padStart(2, "0")} AM]`,
+            });
+          }
+        });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [todayDayLog]);
 
   // ── Mutations ─────────────────────────────────────────────────────────────────
 
@@ -475,125 +519,6 @@ export function AppSidebar() {
     onError: (e: any) => toast.error(e.message),
   });
 
-  const closeDayMutation = useMutation({
-    mutationFn: async ({
-      dateStr,
-      notes,
-      isAutoClose = false,
-    }: {
-      dateStr: string;
-      notes?: string;
-      isAutoClose?: boolean;
-    }) => {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      const start = startOfDay(new Date(dateStr)).toISOString();
-      const end = endOfDay(new Date(dateStr)).toISOString();
-
-      const [{ data: completed }, { data: refunded }, { data: disposed }] =
-        await Promise.all([
-          supabase
-            .from("transactions")
-            .select(
-              "total_amount, vat_amount, payment_method, discount_type, discount_amount",
-            )
-            .gte("created_at", start)
-            .lte("created_at", end)
-            .eq("status", "completed"),
-          supabase
-            .from("transactions")
-            .select("total_amount, vat_amount")
-            .gte("created_at", start)
-            .lte("created_at", end)
-            .eq("status", "refunded"),
-          supabase
-            .from("disposed_items")
-            .select("total_loss, quantity")
-            .gte("disposed_at", start)
-            .lte("disposed_at", end),
-        ]);
-
-      const revenue = (completed || []).reduce(
-        (s, t) => s + Number(t.total_amount),
-        0,
-      );
-      const vat = (completed || []).reduce(
-        (s, t) => s + Number(t.vat_amount),
-        0,
-      );
-      const cash = (completed || [])
-        .filter((t) => t.payment_method === "cash")
-        .reduce((s, t) => s + Number(t.total_amount), 0);
-      const card = (completed || [])
-        .filter((t) => t.payment_method === "card")
-        .reduce((s, t) => s + Number(t.total_amount), 0);
-      const discounts = (completed || [])
-        .filter((t) => t.discount_type)
-        .reduce((s, t) => s + Number(t.discount_amount || 0), 0);
-      const refundTotal = (refunded || []).reduce(
-        (s, t) => s + Number(t.total_amount),
-        0,
-      );
-      const refundVat = (refunded || []).reduce(
-        (s, t) => s + Number(t.vat_amount),
-        0,
-      );
-      const stockLoss = (disposed || []).reduce(
-        (s, d) => s + Number(d.total_loss || 0),
-        0,
-      );
-      const netProfit = revenue - vat - refundTotal + refundVat - stockLoss;
-
-      const logData = {
-        log_date: dateStr,
-        total_sales: parseFloat(revenue.toFixed(2)),
-        transaction_count: (completed || []).length,
-        vat_amount: parseFloat(vat.toFixed(2)),
-        discount_amount: parseFloat(discounts.toFixed(2)),
-        refund_amount: parseFloat(refundTotal.toFixed(2)),
-        refund_count: (refunded || []).length,
-        cash_sales: parseFloat(cash.toFixed(2)),
-        card_sales: parseFloat(card.toFixed(2)),
-        stock_loss: parseFloat(stockLoss.toFixed(2)),
-        net_profit: parseFloat(netProfit.toFixed(2)),
-        closed_by: user?.id || null,
-        notes: isAutoClose
-          ? `[Auto-closed at 3AM] ${notes || ""}`.trim()
-          : notes?.trim() || null,
-      };
-
-      const { error } = await supabase
-        .from("daily_logs")
-        .upsert(logData, { onConflict: "log_date" });
-      if (error) throw error;
-    },
-    onSuccess: () => {
-      toast.success("Day closed! Daily summary recorded.");
-      setEndDayOpen(false);
-      setDayNotes("");
-      queryClient.invalidateQueries({ queryKey: ["sidebar-day-log"] });
-      queryClient.invalidateQueries({ queryKey: ["bk-daily-logs"] });
-    },
-    onError: (e: any) => toast.error(e.message),
-  });
-
-  // ── Auto-close at 3AM ──────────────────────────────────────────────────────
-  useEffect(() => {
-    const checkAutoClose = () => {
-      const now = new Date();
-      if (now.getHours() === 3 && now.getMinutes() === 0 && !todayDayLog) {
-        const yesterday = format(
-          new Date(now.getTime() - 86400000),
-          "yyyy-MM-dd",
-        );
-        closeDayMutation.mutate({ dateStr: yesterday, isAutoClose: true });
-      }
-    };
-    const interval = setInterval(checkAutoClose, 60_000);
-    return () => clearInterval(interval);
-  }, [closeDayMutation, todayDayLog]);
-
   // ── Navigation items ──────────────────────────────────────────────────────────
   const navItems = [
     {
@@ -654,9 +579,6 @@ export function AppSidebar() {
     }
   };
 
-  const fmt = (n: number) =>
-    `₱${n.toLocaleString("en-PH", { minimumFractionDigits: 2 })}`;
-
   // ── Render ────────────────────────────────────────────────────────────────────
   return (
     <Sidebar collapsible="icon">
@@ -706,258 +628,8 @@ export function AppSidebar() {
           </SidebarGroupContent>
         </SidebarGroup>
 
-        {/* ── Day Management ── */}
-        <SidebarGroup>
-          {showText && <SidebarGroupLabel>Store Day</SidebarGroupLabel>}
-          <SidebarGroupContent>
-            <div className={`space-y-1 ${showText ? "px-2" : "px-1"}`}>
-              {/* Day status pill */}
-              {showText && (
-                <div
-                  className={`flex items-center gap-1.5 px-2 py-1.5 rounded-md mb-1 ${
-                    dayStatus === "closed"
-                      ? "bg-muted/40 border"
-                      : "bg-emerald-500/10 border border-emerald-500/20"
-                  }`}
-                >
-                  {dayStatus === "closed" ? (
-                    <>
-                      <Moon className="h-3 w-3 text-muted-foreground" />
-                      <span className="text-xs text-muted-foreground font-medium">
-                        Day Closed
-                      </span>
-                    </>
-                  ) : (
-                    <>
-                      <div className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
-                      <span className="text-xs text-emerald-600 dark:text-emerald-400 font-medium">
-                        Day Open
-                      </span>
-                    </>
-                  )}
-                </div>
-              )}
-
-              {/* START DAY */}
-              {dayStatus !== "open" && (
-                <>
-                  <Button
-                    variant="ghost"
-                    size={showText ? "default" : "icon"}
-                    className="w-full justify-start text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 dark:hover:bg-emerald-950/20"
-                    onClick={() => {
-                      setStartDayOpen((v) => !v);
-                      setEndDayOpen(false);
-                    }}
-                  >
-                    <Sun className="h-4 w-4 shrink-0" />
-                    {showText && (
-                      <>
-                        <span className="ml-2 flex-1 text-left">Start Day</span>
-                        {startDayOpen ? (
-                          <ChevronUp className="h-3.5 w-3.5" />
-                        ) : (
-                          <ChevronDown className="h-3.5 w-3.5" />
-                        )}
-                      </>
-                    )}
-                  </Button>
-                  <InlinePanel open={startDayOpen}>
-                    <div className="text-center space-y-1 pb-3 border-b">
-                      <div className="h-10 w-10 rounded-full bg-emerald-500/10 flex items-center justify-center mx-auto">
-                        <Sun className="h-5 w-5 text-emerald-500" />
-                      </div>
-                      <h4 className="font-semibold text-sm">
-                        Good morning! ☀️
-                      </h4>
-                      <p className="text-xs text-muted-foreground">
-                        {format(new Date(), "EEEE, MMMM d, yyyy")}
-                      </p>
-                    </div>
-                    <div className="space-y-1">
-                      <Label className="text-xs text-muted-foreground">
-                        Opening Notes (optional)
-                      </Label>
-                      <Textarea
-                        placeholder="e.g. Holiday shift, skeleton crew…"
-                        value={dayNotes}
-                        onChange={(e: any) => setDayNotes(e.target.value)}
-                        rows={2}
-                        className="resize-none text-sm"
-                      />
-                    </div>
-                    <CountdownConfirmButton
-                      label="Open Store for Today"
-                      pendingLabel="Opening…"
-                      onConfirm={async () => {
-                        toast.success(
-                          `Store day opened — ${format(new Date(), "MMMM d, yyyy")}`,
-                        );
-                        setStartDayOpen(false);
-                        setDayNotes("");
-                        refetchDayLog();
-                      }}
-                      isPending={false}
-                      variant="success"
-                      seconds={10}
-                    />
-                    <p className="text-[10px] text-muted-foreground text-center leading-tight">
-                      The day closes automatically at 3 AM if not closed
-                      manually.
-                    </p>
-                  </InlinePanel>
-                </>
-              )}
-
-              {/* END DAY */}
-              {dayStatus === "open" && (
-                <>
-                  <Button
-                    variant="ghost"
-                    size={showText ? "default" : "icon"}
-                    className="w-full justify-start text-blue-600 hover:text-blue-700 hover:bg-blue-50 dark:hover:bg-blue-950/20"
-                    onClick={() => {
-                      setEndDayOpen((v) => !v);
-                      setStartDayOpen(false);
-                    }}
-                  >
-                    <Moon className="h-4 w-4 shrink-0" />
-                    {showText && (
-                      <>
-                        <span className="ml-2 flex-1 text-left">End Day</span>
-                        {endDayOpen ? (
-                          <ChevronUp className="h-3.5 w-3.5" />
-                        ) : (
-                          <ChevronDown className="h-3.5 w-3.5" />
-                        )}
-                      </>
-                    )}
-                  </Button>
-                  <InlinePanel open={endDayOpen}>
-                    <div>
-                      <h4 className="font-semibold text-sm flex items-center gap-2">
-                        <Moon className="h-4 w-4 text-blue-500" />
-                        Close Store Day
-                      </h4>
-                      <p className="text-xs text-muted-foreground mt-1">
-                        Generates the official daily summary for{" "}
-                        <span className="font-medium">
-                          {format(new Date(), "MMMM d, yyyy")}
-                        </span>{" "}
-                        and saves it to bookkeeping.
-                      </p>
-                    </div>
-
-                    {anyActiveShift && anyActiveShift.length > 0 && (
-                      <div className="rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-950/20 p-3 space-y-1">
-                        <p className="text-xs font-semibold text-amber-700 dark:text-amber-400">
-                          ⚠ {anyActiveShift.length} shift(s) still active
-                        </p>
-                        {anyActiveShift.map((s: any) => (
-                          <p key={s.id} className="text-xs text-amber-600">
-                            · {(s.employees as any)?.name || "Unknown"} is still
-                            on shift
-                          </p>
-                        ))}
-                        <p className="text-xs text-amber-600 mt-1">
-                          You can still close the day — active shifts will
-                          continue until ended by the cashier.
-                        </p>
-                      </div>
-                    )}
-
-                    {todayTxSummary ? (
-                      <div className="rounded-lg border bg-muted/30 p-3 space-y-1.5 text-xs">
-                        <p className="font-semibold text-muted-foreground mb-2">
-                          Today's Summary
-                        </p>
-                        {[
-                          {
-                            label: "Gross Revenue",
-                            value: fmt(todayTxSummary.revenue),
-                            color: "text-emerald-600",
-                          },
-                          {
-                            label: "Cash / Card",
-                            value: `${fmt(todayTxSummary.cash)} / ${fmt(todayTxSummary.cardSales)}`,
-                          },
-                          {
-                            label: "Transactions",
-                            value: String(todayTxSummary.txCount),
-                          },
-                          {
-                            label: "VAT Collected",
-                            value: fmt(todayTxSummary.vat),
-                          },
-                          {
-                            label: "Refunds",
-                            value: fmt(todayTxSummary.refundTotal),
-                            color: "text-destructive",
-                          },
-                          {
-                            label: "Stock Loss",
-                            value: fmt(todayTxSummary.stockLoss),
-                            color: "text-destructive",
-                          },
-                          {
-                            label: "Est. Net Profit",
-                            value: fmt(todayTxSummary.netProfit),
-                            color:
-                              todayTxSummary.netProfit >= 0
-                                ? "text-emerald-600"
-                                : "text-destructive",
-                          },
-                        ].map((row) => (
-                          <div key={row.label} className="flex justify-between">
-                            <span className="text-muted-foreground">
-                              {row.label}
-                            </span>
-                            <span className={`font-medium ${row.color || ""}`}>
-                              {row.value}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <div className="rounded-lg border bg-muted/20 p-3 text-xs text-muted-foreground text-center">
-                        Loading today's summary…
-                      </div>
-                    )}
-
-                    <div className="space-y-1">
-                      <Label className="text-xs">
-                        Closing Notes (optional)
-                      </Label>
-                      <Textarea
-                        placeholder="e.g. All balanced, busy holiday shift…"
-                        value={dayNotes}
-                        onChange={(e: any) => setDayNotes(e.target.value)}
-                        rows={2}
-                        className="resize-none text-sm"
-                      />
-                    </div>
-
-                    <CountdownConfirmButton
-                      label="Confirm — Close Day"
-                      pendingLabel="Closing…"
-                      onConfirm={() =>
-                        closeDayMutation.mutate({
-                          dateStr: todayStr,
-                          notes: dayNotes,
-                        })
-                      }
-                      isPending={closeDayMutation.isPending}
-                      variant="default"
-                    />
-                  </InlinePanel>
-                </>
-              )}
-            </div>
-          </SidebarGroupContent>
-        </SidebarGroup>
-
         {/* ── Shift & Cashbox Controls ── */}
-        {currentEmployee && dayStatus === "open" && (
+        {currentEmployee && (
           <SidebarGroup>
             {showText && <SidebarGroupLabel>My Shift</SidebarGroupLabel>}
             <SidebarGroupContent>
@@ -1279,16 +951,6 @@ export function AppSidebar() {
               </div>
             </SidebarGroupContent>
           </SidebarGroup>
-        )}
-
-        {/* ── Day-closed shift nudge ── */}
-        {currentEmployee && dayStatus === "closed" && showText && (
-          <div className="mx-3 mt-1 px-3 py-2.5 rounded-lg border bg-muted/30">
-            <p className="text-xs text-muted-foreground leading-snug">
-              The store day is closed. Start a new day to begin shifts and
-              record sales.
-            </p>
-          </div>
         )}
       </SidebarContent>
 

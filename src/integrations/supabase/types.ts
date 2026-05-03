@@ -14,6 +14,58 @@ export type Database = {
   };
   public: {
     Tables: {
+      cashbox_logs: {
+        Row: {
+          amount: number;
+          created_at: string;
+          employee_id: string;
+          id: string;
+          reason: string;
+          shift_id: string | null;
+          type: string;
+        };
+        Insert: {
+          amount?: number;
+          created_at?: string;
+          employee_id: string;
+          id?: string;
+          reason: string;
+          shift_id?: string | null;
+          type: string;
+        };
+        Update: {
+          amount?: number;
+          created_at?: string;
+          employee_id?: string;
+          id?: string;
+          reason?: string;
+          shift_id?: string | null;
+          type?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "cashbox_logs_employee_id_fkey";
+            columns: ["employee_id"];
+            isOneToOne: false;
+            referencedRelation: "active_cashier_sessions";
+            referencedColumns: ["employee_id"];
+          },
+          {
+            foreignKeyName: "cashbox_logs_employee_id_fkey";
+            columns: ["employee_id"];
+            isOneToOne: false;
+            referencedRelation: "employees";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "cashbox_logs_shift_id_fkey";
+            columns: ["shift_id"];
+            isOneToOne: false;
+            referencedRelation: "shifts";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
       categories: {
         Row: {
           created_at: string;
@@ -38,59 +90,59 @@ export type Database = {
         };
         Relationships: [];
       };
-      session_access: {
+      daily_logs: {
         Row: {
+          card_sales: number;
+          cash_sales: number;
+          closed_by: string | null;
+          created_at: string;
+          discount_amount: number;
           id: string;
-          user_id: string;
-          email: string;
-          full_name: string | null;
-          is_active: boolean;
-          requested_at: string | null;
-          granted_at: string | null;
-          revoked_at: string | null;
-          granted_by: string | null;
+          log_date: string;
+          net_profit: number;
           notes: string | null;
+          refund_amount: number;
+          refund_count: number;
+          stock_loss: number;
+          total_sales: number;
+          transaction_count: number;
+          vat_amount: number;
         };
         Insert: {
+          card_sales?: number;
+          cash_sales?: number;
+          closed_by?: string | null;
+          created_at?: string;
+          discount_amount?: number;
           id?: string;
-          user_id: string;
-          email: string;
-          full_name?: string | null;
-          is_active?: boolean;
-          requested_at?: string | null;
-          granted_at?: string | null;
-          revoked_at?: string | null;
-          granted_by?: string | null;
+          log_date: string;
+          net_profit?: number;
           notes?: string | null;
+          refund_amount?: number;
+          refund_count?: number;
+          stock_loss?: number;
+          total_sales?: number;
+          transaction_count?: number;
+          vat_amount?: number;
         };
         Update: {
+          card_sales?: number;
+          cash_sales?: number;
+          closed_by?: string | null;
+          created_at?: string;
+          discount_amount?: number;
           id?: string;
-          user_id?: string;
-          email?: string;
-          full_name?: string | null;
-          is_active?: boolean;
-          requested_at?: string | null;
-          granted_at?: string | null;
-          revoked_at?: string | null;
-          granted_by?: string | null;
+          log_date?: string;
+          net_profit?: number;
           notes?: string | null;
+          refund_amount?: number;
+          refund_count?: number;
+          stock_loss?: number;
+          total_sales?: number;
+          transaction_count?: number;
+          vat_amount?: number;
         };
-        Relationships: [
-          {
-            foreignKeyName: "session_access_user_id_fkey";
-            columns: ["user_id"];
-            isOneToOne: true;
-            referencedRelation: "users";
-            referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "session_access_granted_by_fkey";
-            columns: ["granted_by"];
-            isOneToOne: false;
-            referencedRelation: "users";
-            referencedColumns: ["id"];
-          },
-        ];
+        Relationships: [];
       };
       disposed_items: {
         Row: {
@@ -175,6 +227,107 @@ export type Database = {
         };
         Relationships: [];
       };
+      item_withdrawals: {
+        Row: {
+          created_at: string;
+          id: string;
+          note: string | null;
+          performed_by: string | null;
+          product_id: string;
+          quantity: number;
+          total_cost: number | null;
+          type: Database["public"]["Enums"]["withdrawal_type"];
+          unit_cost: number | null;
+        };
+        Insert: {
+          created_at?: string;
+          id?: string;
+          note?: string | null;
+          performed_by?: string | null;
+          product_id: string;
+          quantity: number;
+          total_cost?: number | null;
+          type: Database["public"]["Enums"]["withdrawal_type"];
+          unit_cost?: number | null;
+        };
+        Update: {
+          created_at?: string;
+          id?: string;
+          note?: string | null;
+          performed_by?: string | null;
+          product_id?: string;
+          quantity?: number;
+          total_cost?: number | null;
+          type?: Database["public"]["Enums"]["withdrawal_type"];
+          unit_cost?: number | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "item_withdrawals_product_id_fkey";
+            columns: ["product_id"];
+            isOneToOne: false;
+            referencedRelation: "products";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      monthly_logs: {
+        Row: {
+          card_sales: number;
+          cash_sales: number;
+          closed_by: string | null;
+          created_at: string;
+          discount_amount: number;
+          id: string;
+          log_month: number;
+          log_year: number;
+          net_profit: number;
+          notes: string | null;
+          refund_amount: number;
+          refund_count: number;
+          stock_loss: number;
+          total_sales: number;
+          transaction_count: number;
+          vat_amount: number;
+        };
+        Insert: {
+          card_sales?: number;
+          cash_sales?: number;
+          closed_by?: string | null;
+          created_at?: string;
+          discount_amount?: number;
+          id?: string;
+          log_month: number;
+          log_year: number;
+          net_profit?: number;
+          notes?: string | null;
+          refund_amount?: number;
+          refund_count?: number;
+          stock_loss?: number;
+          total_sales?: number;
+          transaction_count?: number;
+          vat_amount?: number;
+        };
+        Update: {
+          card_sales?: number;
+          cash_sales?: number;
+          closed_by?: string | null;
+          created_at?: string;
+          discount_amount?: number;
+          id?: string;
+          log_month?: number;
+          log_year?: number;
+          net_profit?: number;
+          notes?: string | null;
+          refund_amount?: number;
+          refund_count?: number;
+          stock_loss?: number;
+          total_sales?: number;
+          transaction_count?: number;
+          vat_amount?: number;
+        };
+        Relationships: [];
+      };
       products: {
         Row: {
           barcode: string | null;
@@ -240,44 +393,90 @@ export type Database = {
           },
         ];
       };
+      session_access: {
+        Row: {
+          email: string;
+          full_name: string | null;
+          granted_at: string | null;
+          granted_by: string | null;
+          id: string;
+          is_active: boolean;
+          notes: string | null;
+          requested_at: string | null;
+          revoked_at: string | null;
+          user_id: string;
+        };
+        Insert: {
+          email: string;
+          full_name?: string | null;
+          granted_at?: string | null;
+          granted_by?: string | null;
+          id?: string;
+          is_active?: boolean;
+          notes?: string | null;
+          requested_at?: string | null;
+          revoked_at?: string | null;
+          user_id: string;
+        };
+        Update: {
+          email?: string;
+          full_name?: string | null;
+          granted_at?: string | null;
+          granted_by?: string | null;
+          id?: string;
+          is_active?: boolean;
+          notes?: string | null;
+          requested_at?: string | null;
+          revoked_at?: string | null;
+          user_id?: string;
+        };
+        Relationships: [];
+      };
       shifts: {
         Row: {
-          id: string;
-          employee_id: string;
+          cash_difference: number | null;
           clock_in: string;
           clock_out: string | null;
           created_at: string;
-          starting_cash: number | null;
+          employee_id: string;
           ending_cash: number | null;
           expected_cash: number | null;
-          cash_difference: number | null;
+          id: string;
           notes: string | null;
+          starting_cash: number | null;
         };
         Insert: {
-          id?: string;
-          employee_id: string;
+          cash_difference?: number | null;
           clock_in?: string;
           clock_out?: string | null;
           created_at?: string;
-          starting_cash?: number | null;
+          employee_id: string;
           ending_cash?: number | null;
           expected_cash?: number | null;
-          cash_difference?: number | null;
+          id?: string;
           notes?: string | null;
+          starting_cash?: number | null;
         };
         Update: {
-          id?: string;
-          employee_id?: string;
+          cash_difference?: number | null;
           clock_in?: string;
           clock_out?: string | null;
           created_at?: string;
-          starting_cash?: number | null;
+          employee_id?: string;
           ending_cash?: number | null;
           expected_cash?: number | null;
-          cash_difference?: number | null;
+          id?: string;
           notes?: string | null;
+          starting_cash?: number | null;
         };
         Relationships: [
+          {
+            foreignKeyName: "shifts_employee_id_fkey";
+            columns: ["employee_id"];
+            isOneToOne: false;
+            referencedRelation: "active_cashier_sessions";
+            referencedColumns: ["employee_id"];
+          },
           {
             foreignKeyName: "shifts_employee_id_fkey";
             columns: ["employee_id"];
@@ -332,178 +531,6 @@ export type Database = {
           },
         ];
       };
-      cashbox_logs: {
-        Row: {
-          id: string;
-          employee_id: string;
-          shift_id: string | null;
-          type: "cash_in" | "cash_out";
-          amount: number;
-          reason: string;
-          created_at: string;
-        };
-        Insert: {
-          id?: string;
-          employee_id: string;
-          shift_id?: string | null;
-          type: "cash_in" | "cash_out";
-          amount?: number;
-          reason: string;
-          created_at?: string;
-        };
-        Update: {
-          id?: string;
-          employee_id?: string;
-          shift_id?: string | null;
-          type?: "cash_in" | "cash_out";
-          amount?: number;
-          reason?: string;
-          created_at?: string;
-        };
-        Relationships: [
-          {
-            foreignKeyName: "cashbox_logs_employee_id_fkey";
-            columns: ["employee_id"];
-            isOneToOne: false;
-            referencedRelation: "employees";
-            referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "cashbox_logs_shift_id_fkey";
-            columns: ["shift_id"];
-            isOneToOne: false;
-            referencedRelation: "shifts";
-            referencedColumns: ["id"];
-          },
-        ];
-      };
-      daily_logs: {
-        Row: {
-          id: string;
-          log_date: string;
-          total_sales: number;
-          transaction_count: number;
-          vat_amount: number;
-          discount_amount: number;
-          refund_amount: number;
-          refund_count: number;
-          cash_sales: number;
-          card_sales: number;
-          stock_loss: number;
-          net_profit: number;
-          closed_by: string | null;
-          notes: string | null;
-          created_at: string;
-        };
-        Insert: {
-          id?: string;
-          log_date: string;
-          total_sales?: number;
-          transaction_count?: number;
-          vat_amount?: number;
-          discount_amount?: number;
-          refund_amount?: number;
-          refund_count?: number;
-          cash_sales?: number;
-          card_sales?: number;
-          stock_loss?: number;
-          net_profit?: number;
-          closed_by?: string | null;
-          notes?: string | null;
-          created_at?: string;
-        };
-        Update: {
-          id?: string;
-          log_date?: string;
-          total_sales?: number;
-          transaction_count?: number;
-          vat_amount?: number;
-          discount_amount?: number;
-          refund_amount?: number;
-          refund_count?: number;
-          cash_sales?: number;
-          card_sales?: number;
-          stock_loss?: number;
-          net_profit?: number;
-          closed_by?: string | null;
-          notes?: string | null;
-          created_at?: string;
-        };
-        Relationships: [
-          {
-            foreignKeyName: "daily_logs_closed_by_fkey";
-            columns: ["closed_by"];
-            isOneToOne: false;
-            referencedRelation: "users";
-            referencedColumns: ["id"];
-          },
-        ];
-      };
-      monthly_logs: {
-        Row: {
-          id: string;
-          log_year: number;
-          log_month: number;
-          total_sales: number;
-          transaction_count: number;
-          vat_amount: number;
-          discount_amount: number;
-          refund_amount: number;
-          refund_count: number;
-          cash_sales: number;
-          card_sales: number;
-          stock_loss: number;
-          net_profit: number;
-          closed_by: string | null;
-          notes: string | null;
-          created_at: string;
-        };
-        Insert: {
-          id?: string;
-          log_year: number;
-          log_month: number;
-          total_sales?: number;
-          transaction_count?: number;
-          vat_amount?: number;
-          discount_amount?: number;
-          refund_amount?: number;
-          refund_count?: number;
-          cash_sales?: number;
-          card_sales?: number;
-          stock_loss?: number;
-          net_profit?: number;
-          closed_by?: string | null;
-          notes?: string | null;
-          created_at?: string;
-        };
-        Update: {
-          id?: string;
-          log_year?: number;
-          log_month?: number;
-          total_sales?: number;
-          transaction_count?: number;
-          vat_amount?: number;
-          discount_amount?: number;
-          refund_amount?: number;
-          refund_count?: number;
-          cash_sales?: number;
-          card_sales?: number;
-          stock_loss?: number;
-          net_profit?: number;
-          closed_by?: string | null;
-          notes?: string | null;
-          created_at?: string;
-        };
-        Relationships: [
-          {
-            foreignKeyName: "monthly_logs_closed_by_fkey";
-            columns: ["closed_by"];
-            isOneToOne: false;
-            referencedRelation: "users";
-            referencedColumns: ["id"];
-          },
-        ];
-      };
       transactions: {
         Row: {
           cash_tendered: number | null;
@@ -550,15 +577,7 @@ export type Database = {
           total_amount?: number;
           vat_amount?: number;
         };
-        Relationships: [
-          {
-            foreignKeyName: "transactions_employee_id_fkey";
-            columns: ["employee_id"];
-            isOneToOne: false;
-            referencedRelation: "users";
-            referencedColumns: ["id"];
-          },
-        ];
+        Relationships: [];
       };
       user_roles: {
         Row: {
@@ -580,9 +599,28 @@ export type Database = {
       };
     };
     Views: {
-      [_ in never]: never;
+      active_cashier_sessions: {
+        Row: {
+          email: string | null;
+          employee_id: string | null;
+          employee_name: string | null;
+          full_name: string | null;
+          granted_at: string | null;
+          id: string | null;
+          is_active: boolean | null;
+          requested_at: string | null;
+          revoked_at: string | null;
+          role: Database["public"]["Enums"]["app_role"] | null;
+          user_id: string | null;
+        };
+        Relationships: [];
+      };
     };
     Functions: {
+      create_employee_on_access_grant: {
+        Args: { target_email: string; target_user_id: string };
+        Returns: undefined;
+      };
       has_role: {
         Args: {
           _role: Database["public"]["Enums"]["app_role"];
@@ -590,12 +628,17 @@ export type Database = {
         };
         Returns: boolean;
       };
+      revoke_session_access: {
+        Args: { target_user_id: string };
+        Returns: undefined;
+      };
     };
     Enums: {
       app_role: "admin" | "cashier" | "store_clerk";
       employee_role: "cashier" | "admin" | "stock_clerk";
       payment_method: "cash" | "card";
       transaction_status: "completed" | "refunded" | "voided";
+      withdrawal_type: "OWNER_WITHDRAWAL" | "STAFF_WITHDRAWAL" | "DAMAGE";
     };
     CompositeTypes: {
       [_ in never]: never;
@@ -727,9 +770,10 @@ export const Constants = {
   public: {
     Enums: {
       app_role: ["admin", "cashier", "store_clerk"],
-      employee_role: ["cashier", "manager", "stock_clerk"],
+      employee_role: ["cashier", "admin", "stock_clerk"],
       payment_method: ["cash", "card"],
       transaction_status: ["completed", "refunded", "voided"],
+      withdrawal_type: ["OWNER_WITHDRAWAL", "STAFF_WITHDRAWAL", "DAMAGE"],
     },
   },
 } as const;
