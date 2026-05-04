@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unused-vars */
 /* eslint-disable react-hooks/set-state-in-effect */
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -17,6 +18,8 @@ import {
   ArrowUpCircle,
   ChevronDown,
   ChevronUp,
+  WifiOff,
+  RefreshCw,
 } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import {
@@ -48,109 +51,30 @@ import { useUserRole } from "@/hooks/useUserRole";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { format, startOfDay, endOfDay } from "date-fns";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { toast } from "sonner";
 import { useNavigate } from "react-router-dom";
 
+// Offline-first imports
+import { db } from "@/lib/db";
+import {
+  syncPendingShifts,
+  seedShiftsFromRemote,
+  seedCashboxLogsFromRemote,
+  seedTransactionsFromRemote,
+} from "@/db/shiftSync";
+import { useOnlineStatus } from "@/hooks/useOnlineStatus";
+
 // ── Types ──────────────────────────────────────────────────────────────────────
+
 type CashboxForm = {
   type: "cash_in" | "cash_out";
   amount: string;
   reason: string;
 };
 
-// ── Countdown Button ──────────────────────────────────────────────────────────
-// function CountdownConfirmButton({
-//   label,
-//   pendingLabel,
-//   onConfirm,
-//   isPending,
-//   variant = "default",
-//   seconds = 10,
-// }: {
-//   label: string;
-//   pendingLabel: string;
-//   onConfirm: () => void;
-//   isPending: boolean;
-//   variant?: "default" | "destructive" | "success";
-//   seconds?: number;
-// }) {
-//   const [countdown, setCountdown] = useState(seconds);
-//   const [ready, setReady] = useState(false);
-//   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-//   useEffect(() => {
-//     setCountdown(seconds);
-//     setReady(false);
-//     intervalRef.current = setInterval(() => {
-//       setCountdown((prev) => {
-//         if (prev <= 1) {
-//           clearInterval(intervalRef.current!);
-//           setReady(true);
-//           return 0;
-//         }
-//         return prev - 1;
-//       });
-//     }, 1000);
-//     return () => clearInterval(intervalRef.current!);
-//   }, [seconds]);
-
-//   const bgClass =
-//     variant === "destructive"
-//       ? "bg-destructive hover:bg-destructive/90 text-destructive-foreground"
-//       : variant === "success"
-//         ? "bg-emerald-600 hover:bg-emerald-700 text-white"
-//         : "bg-primary hover:bg-primary/90 text-primary-foreground";
-
-//   return (
-//     <div className="space-y-2">
-//       {!ready && (
-//         <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-muted/50 border border-border">
-//           <div className="relative h-7 w-7 shrink-0">
-//             <svg className="h-7 w-7 -rotate-90" viewBox="0 0 28 28">
-//               <circle
-//                 cx="14"
-//                 cy="14"
-//                 r="11"
-//                 fill="none"
-//                 stroke="currentColor"
-//                 strokeWidth="2.5"
-//                 className="text-muted-foreground/20"
-//               />
-//               <circle
-//                 cx="14"
-//                 cy="14"
-//                 r="11"
-//                 fill="none"
-//                 stroke="currentColor"
-//                 strokeWidth="2.5"
-//                 strokeDasharray={`${2 * Math.PI * 11}`}
-//                 strokeDashoffset={`${2 * Math.PI * 11 * (1 - countdown / seconds)}`}
-//                 strokeLinecap="round"
-//                 className="text-primary transition-all duration-1000"
-//               />
-//             </svg>
-//             <span className="absolute inset-0 flex items-center justify-center text-[10px] font-bold text-foreground">
-//               {countdown}
-//             </span>
-//           </div>
-//           <p className="text-xs text-muted-foreground leading-tight">
-//             Please review the details above before confirming.
-//           </p>
-//         </div>
-//       )}
-//       <Button
-//         className={`w-full ${bgClass} transition-all`}
-//         disabled={!ready || isPending}
-//         onClick={onConfirm}
-//       >
-//         {isPending ? pendingLabel : ready ? label : `Wait ${countdown}s…`}
-//       </Button>
-//     </div>
-//   );
-// }
-
 // ── Inline Panel ──────────────────────────────────────────────────────────────
+
 function InlinePanel({
   open,
   children,
@@ -166,7 +90,22 @@ function InlinePanel({
   );
 }
 
+// ── Offline Badge ─────────────────────────────────────────────────────────────
+
+function OfflineBadge({ pendingCount }: { pendingCount: number }) {
+  if (pendingCount === 0) return null;
+  return (
+    <div className="mx-2 mb-2 flex items-center gap-1.5 px-2 py-1.5 rounded-md bg-amber-500/10 border border-amber-500/20">
+      <WifiOff className="h-3 w-3 text-amber-500 shrink-0" />
+      <span className="text-xs text-amber-600 dark:text-amber-400 leading-tight">
+        {pendingCount} pending sync{pendingCount > 1 ? "s" : ""}
+      </span>
+    </div>
+  );
+}
+
 // ── Main Sidebar ──────────────────────────────────────────────────────────────
+
 export function AppSidebar() {
   const { state, setOpenMobile } = useSidebar();
   const isMobile = useIsMobile();
@@ -185,6 +124,8 @@ export function AppSidebar() {
     amount: "",
     reason: "",
   });
+  const [pendingSyncCount, setPendingSyncCount] = useState(0);
+  const [isSyncing, setIsSyncing] = useState(false);
 
   const {
     isAdmin,
@@ -206,6 +147,45 @@ export function AppSidebar() {
         ? "Cashier"
         : "User";
 
+  // ── Pending count watcher ──────────────────────────────────────────────────
+
+  const refreshPendingCount = useCallback(async () => {
+    const count = await db.shifts
+      .where("_sync_status")
+      .anyOf(["pending", "error"])
+      .count();
+    const logCount = await db.cashbox_logs
+      .where("_sync_status")
+      .anyOf(["pending", "error"])
+      .count();
+    setPendingSyncCount(count + logCount);
+  }, []);
+
+  // ── Manual sync handler ────────────────────────────────────────────────────
+
+  const handleManualSync = useCallback(async () => {
+    if (isSyncing) return;
+    setIsSyncing(true);
+    try {
+      const { synced, failed } = await syncPendingShifts();
+      if (synced > 0) {
+        toast.success(`Synced ${synced} record${synced > 1 ? "s" : ""}`);
+        queryClient.invalidateQueries({ queryKey: ["sidebar-active-shift"] });
+        queryClient.invalidateQueries({ queryKey: ["active-shifts"] });
+      }
+      if (failed > 0) {
+        toast.error(`${failed} record${failed > 1 ? "s" : ""} failed to sync`);
+      }
+    } finally {
+      setIsSyncing(false);
+      refreshPendingCount();
+    }
+  }, [isSyncing, queryClient, refreshPendingCount]);
+
+  // ── Online/offline detection ───────────────────────────────────────────────
+
+  const isOnline = useOnlineStatus(handleManualSync);
+
   // ── Data queries ─────────────────────────────────────────────────────────────
 
   const { data: currentEmployee } = useQuery({
@@ -217,24 +197,50 @@ export function AppSidebar() {
       if (!user) return null;
       const { data } = await supabase
         .from("employees")
-        .select("id, name, role")
+        .select("id, name, role, user_id")
         .eq("user_id", user.id)
         .single();
       return data;
     },
   });
 
+  /**
+   * Active shift — reads from Dexie first (instant), falls back to remote.
+   * This means the UI works immediately even with no network.
+   */
   const { data: activeShift } = useQuery({
     queryKey: ["sidebar-active-shift", currentEmployee?.id],
     enabled: !!currentEmployee?.id,
     queryFn: async () => {
+      // 1. Try Dexie first
+      const localShift = await db.shifts
+        .where("employee_id")
+        .equals(currentEmployee!.id)
+        .filter((s: any) => s.clock_out === null)
+        .first();
+
+      if (localShift) return localShift;
+
+      // 2. No local record — try remote (if online)
+      if (!navigator.onLine) return null;
+
       const { data } = await supabase
         .from("shifts")
         .select("*")
         .eq("employee_id", currentEmployee!.id)
         .is("clock_out", null)
         .maybeSingle();
-      return data;
+
+      if (data) {
+        // Cache it locally
+        await db.shifts.put({
+          ...data,
+          _sync_status: "synced",
+          _sync_error: null,
+        });
+      }
+
+      return data ?? null;
     },
   });
 
@@ -242,6 +248,28 @@ export function AppSidebar() {
     queryKey: ["sidebar-last-shift-any"],
     enabled: !activeShift,
     queryFn: async () => {
+      // Dexie: find most recent completed shift for this employee
+      if (currentEmployee?.id) {
+        const localLast = await db.shifts
+          .where("employee_id")
+          .equals(currentEmployee.id)
+          .filter((s: any) => s.clock_out !== null && s.ending_cash !== null)
+          .reverse()
+          .sortBy("clock_out");
+
+        if (localLast.length > 0) {
+          const s = localLast[0];
+          return {
+            ending_cash: s.ending_cash,
+            clock_out: s.clock_out,
+            employees: { name: currentEmployee.name },
+          };
+        }
+      }
+
+      // Fallback to remote
+      if (!navigator.onLine) return null;
+
       const { data } = await supabase
         .from("shifts")
         .select("ending_cash, clock_out, employees(name)")
@@ -250,6 +278,7 @@ export function AppSidebar() {
         .order("clock_out", { ascending: false })
         .limit(1)
         .maybeSingle();
+
       return data;
     },
   });
@@ -258,6 +287,7 @@ export function AppSidebar() {
   const { data: todayDayLog } = useQuery({
     queryKey: ["sidebar-day-log", todayStr],
     queryFn: async () => {
+      if (!navigator.onLine) return null;
       const { data } = await supabase
         .from("daily_logs")
         .select("*")
@@ -267,7 +297,20 @@ export function AppSidebar() {
     },
   });
 
-  // ── Close-day mutation (auto only) ────────────────────────────────────────
+  // ── Seed Dexie on employee load ────────────────────────────────────────────
+
+  useEffect(() => {
+    if (!currentEmployee?.id || !navigator.onLine) return;
+    seedShiftsFromRemote(currentEmployee.id).then(refreshPendingCount);
+  }, [currentEmployee?.id, refreshPendingCount]);
+
+  useEffect(() => {
+    if (!activeShift?.id || !currentEmployee?.id || !navigator.onLine) return;
+    seedCashboxLogsFromRemote(currentEmployee.id, activeShift.id);
+  }, [activeShift?.id, currentEmployee?.id]);
+
+  // ── Close-day mutation ────────────────────────────────────────────────────
+
   const closeDayMutation = useMutation({
     mutationFn: async ({
       dateStr,
@@ -276,6 +319,8 @@ export function AppSidebar() {
       dateStr: string;
       notes?: string;
     }) => {
+      if (!navigator.onLine) return; // skip auto-close offline
+
       const {
         data: { user },
       } = await supabase.auth.getUser();
@@ -367,6 +412,7 @@ export function AppSidebar() {
   });
 
   // ── Auto-close: at 2AM nightly OR on morning open (5AM–11AM) ─────────────
+
   const morningAutoCloseFired = useRef(false);
 
   useEffect(() => {
@@ -415,111 +461,246 @@ export function AppSidebar() {
 
   // ── Mutations ─────────────────────────────────────────────────────────────────
 
+  /**
+   * CLOCK IN — offline-first
+   * 1. Write to Dexie immediately (status: pending)
+   * 2. If online, push to Supabase and mark synced
+   * 3. If offline, leave as pending — synced on reconnect
+   */
   const clockInMutation = useMutation({
     mutationFn: async (startingCash: number) => {
-      const { error } = await supabase.from("shifts").insert({
-        employee_id: currentEmployee!.id,
+      if (!currentEmployee) throw new Error("No employee found");
+
+      const newShift = {
+        id: crypto.randomUUID(),
+        employee_id: currentEmployee.id,
         starting_cash: startingCash,
-      });
-      if (error) throw error;
+        clock_in: new Date().toISOString(),
+        clock_out: null,
+        ending_cash: null,
+        expected_cash: null,
+        cash_difference: null,
+        notes: null,
+        created_at: new Date().toISOString(),
+        _sync_status: "pending" as const,
+        _sync_error: null,
+      };
+
+      // 1. Save locally — instant, always works
+      await db.shifts.add(newShift);
+
+      // 2. Try remote immediately if online
+      if (navigator.onLine) {
+        const { _sync_status, _sync_error, ...payload } = newShift;
+        const { error } = await supabase.from("shifts").insert(payload);
+        if (error) {
+          // Leave as pending — will retry on reconnect
+          console.warn(
+            "[ClockIn] Remote insert failed, queued:",
+            error.message,
+          );
+        } else {
+          await db.shifts.update(newShift.id, {
+            _sync_status: "synced",
+            _sync_error: null,
+          });
+        }
+      }
+
+      return newShift;
     },
-    onSuccess: () => {
-      toast.success("Shift started!");
+    onSuccess: async () => {
+      toast.success(
+        navigator.onLine
+          ? "Shift started!"
+          : "Shift started (offline — will sync when online)",
+      );
       setClockInOpen(false);
       setClockInCash("");
       queryClient.invalidateQueries({ queryKey: ["sidebar-active-shift"] });
       queryClient.invalidateQueries({ queryKey: ["active-shifts"] });
       queryClient.invalidateQueries({ queryKey: ["sidebar-any-active-shift"] });
+      refreshPendingCount();
     },
     onError: (e: any) => toast.error(e.message),
   });
 
+  /**
+   * CLOCK OUT — offline-first
+   * Computes expectedCash from Dexie (transactions + cashbox_logs),
+   * updates the shift locally, then syncs if online.
+   */
   const clockOutMutation = useMutation({
     mutationFn: async (endingCash: number) => {
       if (!activeShift || !currentEmployee) throw new Error("No active shift");
-      const { data: empRecord } = await supabase
-        .from("employees")
-        .select("user_id")
-        .eq("id", currentEmployee.id)
-        .single();
-      if (!empRecord?.user_id)
-        throw new Error("Employee has no linked user account");
 
-      const { data: cashTx } = await supabase
-        .from("transactions")
-        .select("total_amount")
-        .eq("employee_id", empRecord.user_id)
-        .eq("payment_method", "cash")
-        .eq("status", "completed")
-        .gte("created_at", activeShift.clock_in);
+      // Resolve the employee's user_id for transaction lookup
+      let userId = currentEmployee.user_id as string | null;
+      if (!userId && navigator.onLine) {
+        const { data: empRecord } = await supabase
+          .from("employees")
+          .select("user_id")
+          .eq("id", currentEmployee.id)
+          .single();
+        userId = empRecord?.user_id ?? null;
+      }
+      if (!userId) throw new Error("Employee has no linked user account");
 
-      const { data: cashboxAdjustments } = await supabase
-        .from("cashbox_logs")
-        .select("type, amount")
-        .eq("shift_id", activeShift.id);
+      // Seed transactions into Dexie if online (ensures cache is fresh)
+      if (navigator.onLine) {
+        await seedTransactionsFromRemote(userId, activeShift.clock_in);
+        await seedCashboxLogsFromRemote(currentEmployee.id, activeShift.id);
+      }
 
-      const cashSalesTotal = (cashTx || []).reduce(
-        (s, t) => s + Number(t.total_amount),
+      // 1. Read cash transactions from Dexie
+      const cashTransactions = await db.transactions
+        .where("employee_id")
+        .equals(userId)
+        .filter(
+          (t: any) =>
+            t.payment_method === "cash" &&
+            t.status === "completed" &&
+            t.created_at >= activeShift.clock_in,
+        )
+        .toArray();
+
+      // 2. Read cashbox adjustments from Dexie
+      const adjustments = await db.cashbox_logs
+        .where("shift_id")
+        .equals(activeShift.id)
+        .toArray();
+
+      const cashSalesTotal = cashTransactions.reduce(
+        (s: any, t: any) => s + Number(t.total_amount),
         0,
       );
-      const cashInAdj = (cashboxAdjustments || [])
-        .filter((l) => l.type === "cash_in")
-        .reduce((s, l) => s + Number(l.amount), 0);
-      const cashOutAdj = (cashboxAdjustments || [])
-        .filter((l) => l.type === "cash_out")
-        .reduce((s, l) => s + Number(l.amount), 0);
+      const cashInAdj = adjustments
+        .filter((l: any) => l.type === "cash_in")
+        .reduce((s: any, l: any) => s + Number(l.amount), 0);
+      const cashOutAdj = adjustments
+        .filter((l: any) => l.type === "cash_out")
+        .reduce((s: any, l: any) => s + Number(l.amount), 0);
+
       const expectedCash =
         Number(activeShift.starting_cash) +
         cashSalesTotal +
         cashInAdj -
         cashOutAdj;
       const difference = endingCash - expectedCash;
+      const clockOutTime = new Date().toISOString();
 
-      const { error } = await supabase
-        .from("shifts")
-        .update({
-          clock_out: new Date().toISOString(),
-          ending_cash: endingCash,
-          expected_cash: expectedCash,
-          cash_difference: difference,
-        })
-        .eq("id", activeShift.id);
-      if (error) throw error;
+      // 3. Update Dexie immediately
+      await db.shifts.update(activeShift.id, {
+        clock_out: clockOutTime,
+        ending_cash: endingCash,
+        expected_cash: expectedCash,
+        cash_difference: difference,
+        _sync_status: navigator.onLine ? "pending" : "pending",
+      });
+
+      // 4. Try remote if online
+      if (navigator.onLine) {
+        const { error } = await supabase
+          .from("shifts")
+          .update({
+            clock_out: clockOutTime,
+            ending_cash: endingCash,
+            expected_cash: expectedCash,
+            cash_difference: difference,
+          })
+          .eq("id", activeShift.id);
+
+        if (error) {
+          console.warn(
+            "[ClockOut] Remote update failed, queued:",
+            error.message,
+          );
+          await db.shifts.update(activeShift.id, {
+            _sync_status: "error",
+            _sync_error: error.message,
+          });
+        } else {
+          await db.shifts.update(activeShift.id, {
+            _sync_status: "synced",
+            _sync_error: null,
+          });
+        }
+      }
+
       return activeShift.id;
     },
     onSuccess: (shiftId) => {
-      toast.success("Shift ended!");
+      toast.success(
+        navigator.onLine
+          ? "Shift ended!"
+          : "Shift ended (offline — will sync when online)",
+      );
       setClockOutOpen(false);
       setClockOutCash("");
       queryClient.invalidateQueries({ queryKey: ["sidebar-active-shift"] });
       queryClient.invalidateQueries({ queryKey: ["active-shifts"] });
       queryClient.invalidateQueries({ queryKey: ["sidebar-any-active-shift"] });
+      queryClient.invalidateQueries({ queryKey: ["sidebar-last-shift-any"] });
+      refreshPendingCount();
       navigate(`/shift-report/${shiftId}`);
     },
     onError: (e: any) => toast.error(e.message),
   });
 
+  /**
+   * CASHBOX LOG — offline-first
+   */
   const cashboxLogMutation = useMutation({
     mutationFn: async () => {
       if (!currentEmployee) throw new Error("No employee found");
-      const { error } = await supabase.from("cashbox_logs").insert({
+
+      const newLog = {
+        id: crypto.randomUUID(),
         employee_id: currentEmployee.id,
         shift_id: activeShift?.id || null,
-        type: cashboxForm.type as "cash_in" | "cash_out",
+        type: cashboxForm.type,
         amount: parseFloat(cashboxForm.amount),
         reason: cashboxForm.reason.trim(),
-      });
-      if (error) throw error;
+        created_at: new Date().toISOString(),
+        _sync_status: "pending" as const,
+        _sync_error: null,
+      };
+
+      // 1. Save locally
+      await db.cashbox_logs.add(newLog);
+
+      // 2. Try remote immediately if online
+      if (navigator.onLine) {
+        const { _sync_status, _sync_error, ...payload } = newLog;
+        const { error } = await supabase.from("cashbox_logs").insert(payload);
+        if (error) {
+          console.warn(
+            "[CashboxLog] Remote insert failed, queued:",
+            error.message,
+          );
+        } else {
+          await db.cashbox_logs.update(newLog.id, {
+            _sync_status: "synced",
+            _sync_error: null,
+          });
+        }
+      }
     },
     onSuccess: () => {
-      toast.success("Cashbox log recorded");
+      toast.success(
+        navigator.onLine
+          ? "Cashbox log recorded"
+          : "Cashbox log saved (offline — will sync when online)",
+      );
       setCashboxOpen(false);
       setCashboxForm({ type: "cash_in", amount: "", reason: "" });
+      refreshPendingCount();
     },
     onError: (e: any) => toast.error(e.message),
   });
 
   // ── Navigation items ──────────────────────────────────────────────────────────
+
   const navItems = [
     {
       title: "Dashboard",
@@ -580,6 +761,7 @@ export function AppSidebar() {
   };
 
   // ── Render ────────────────────────────────────────────────────────────────────
+
   return (
     <Sidebar collapsible="icon">
       <SidebarHeader className="p-4 border-b border-sidebar-border">
@@ -588,17 +770,42 @@ export function AppSidebar() {
             <ShoppingCart className="h-4 w-4 text-primary-foreground" />
           </div>
           {showText && (
-            <div>
+            <div className="flex-1 min-w-0">
               <h2 className="text-sm font-semibold text-sidebar-foreground">
                 GroceryPOS
               </h2>
-              <p className="text-xs text-muted-foreground">{roleLabel}</p>
+              <div className="flex items-center gap-1.5">
+                <p className="text-xs text-muted-foreground">{roleLabel}</p>
+                {/* Connectivity indicator */}
+                <span
+                  className={`h-1.5 w-1.5 rounded-full shrink-0 ${
+                    isOnline ? "bg-success" : "bg-amber-500 animate-pulse"
+                  }`}
+                  title={isOnline ? "Online" : "Offline"}
+                />
+              </div>
             </div>
+          )}
+          {/* Manual sync button — only when there are pending records */}
+          {showText && pendingSyncCount > 0 && isOnline && (
+            <button
+              onClick={handleManualSync}
+              disabled={isSyncing}
+              title="Sync pending records"
+              className="shrink-0 text-muted-foreground hover:text-foreground transition-colors"
+            >
+              <RefreshCw
+                className={`h-3.5 w-3.5 ${isSyncing ? "animate-spin" : ""}`}
+              />
+            </button>
           )}
         </div>
       </SidebarHeader>
 
       <SidebarContent>
+        {/* ── Pending sync badge ── */}
+        {showText && <OfflineBadge pendingCount={pendingSyncCount} />}
+
         {/* ── Navigation ── */}
         <SidebarGroup>
           <SidebarGroupLabel>Menu</SidebarGroupLabel>
@@ -640,6 +847,10 @@ export function AppSidebar() {
                     <span className="text-xs text-success font-medium">
                       On Shift
                     </span>
+                    {/* Show pending indicator on the shift badge if offline */}
+                    {(activeShift as any)._sync_status === "pending" && (
+                      <WifiOff className="h-3 w-3 text-amber-500 ml-auto" />
+                    )}
                   </div>
                 )}
 
@@ -678,6 +889,12 @@ export function AppSidebar() {
                         <p className="text-xs text-muted-foreground mt-1">
                           Enter the starting cash amount in the cashbox.
                         </p>
+                        {!isOnline && (
+                          <p className="text-xs text-amber-600 dark:text-amber-400 mt-1 flex items-center gap-1">
+                            <WifiOff className="h-3 w-3" />
+                            Offline — shift will sync when connected
+                          </p>
+                        )}
                       </div>
 
                       {lastShift?.ending_cash != null && (
@@ -785,6 +1002,12 @@ export function AppSidebar() {
                           Count the cash in the cashbox and enter the total
                           below.
                         </p>
+                        {!isOnline && (
+                          <p className="text-xs text-amber-600 dark:text-amber-400 mt-1 flex items-center gap-1">
+                            <WifiOff className="h-3 w-3" />
+                            Offline — will sync when connected
+                          </p>
+                        )}
                       </div>
                       <div className="space-y-1">
                         <Label>Ending Cash Count (₱)</Label>
@@ -864,6 +1087,12 @@ export function AppSidebar() {
                         <p className="text-xs text-muted-foreground mt-1">
                           Log any cash added or removed outside of transactions.
                         </p>
+                        {!isOnline && (
+                          <p className="text-xs text-amber-600 dark:text-amber-400 mt-1 flex items-center gap-1">
+                            <WifiOff className="h-3 w-3" />
+                            Offline — will sync when connected
+                          </p>
+                        )}
                       </div>
 
                       <div className="space-y-3">

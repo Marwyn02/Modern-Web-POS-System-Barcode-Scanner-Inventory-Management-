@@ -1,8 +1,10 @@
+/* eslint-disable @typescript-eslint/no-unused-vars */
 /* eslint-disable react-hooks/exhaustive-deps */
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useState, useRef, useCallback, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
+import { db } from "@/lib/db";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -77,23 +79,59 @@ export default function Sales() {
     },
   });
 
-  const { data: products } = useQuery({
-    queryKey: ["sales-products", search, categoryFilter],
+  // 1. Seed query — runs first, once
+  const { isSuccess: isSeedDone } = useQuery({
+    queryKey: ["seed-products"],
+    staleTime: 5 * 60 * 1000,
     queryFn: async () => {
-      let query = supabase
-        .from("products")
-        .select("*")
-        .eq("is_active", true)
-        .gt("stock_quantity", 0)
-        .order("name");
-      if (search)
-        query = query.or(
-          `name.ilike.%${search}%,barcode.ilike.%${search}%,sku.ilike.%${search}%`,
+      if (!navigator.onLine) return true;
+      const { data } = await supabase.from("products").select("*");
+      if (data?.length) {
+        await db.products.bulkPut(
+          data.map((p) => ({
+            ...p,
+            category_id: p.category_id ?? undefined,
+            is_active: p.is_active ?? undefined,
+            barcode: p.barcode ?? undefined,
+            sku: p.sku ?? undefined,
+            cost_price: p.cost_price ?? undefined,
+            discount_percentage: p.discount_percentage ?? undefined,
+            stock_quantity: p.stock_quantity ?? undefined,
+            _sync_status: "synced" as const,
+            _sync_error: null,
+          })),
         );
+      }
+      return true;
+    },
+  });
+
+  // ── Products query — Dexie first ──────────────────────────────────────────
+  // 2. Products query — waits for seed, reads ONLY from Dexie
+  const { data: products, isLoading: isProductsLoading } = useQuery({
+    queryKey: ["sales-products", search, categoryFilter],
+    enabled: isSeedDone,
+    queryFn: async () => {
+      let data: any[] = await db.products.toArray();
+
+      data = data.filter((p) => p.is_active === true || p.is_active === 1);
+
+      data = data.filter((p) => p.stock_quantity > 0);
+
+      if (search) {
+        const s = search.toLowerCase();
+        data = data.filter(
+          (p) =>
+            p.name?.toLowerCase().includes(s) ||
+            p.barcode?.toLowerCase().includes(s) ||
+            p.sku?.toLowerCase().includes(s),
+        );
+      }
+
       if (categoryFilter !== "all")
-        query = query.eq("category_id", categoryFilter);
-      const { data } = await query;
-      return data || [];
+        data = data.filter((p) => p.category_id === categoryFilter);
+
+      return data.sort((a, b) => a.name.localeCompare(b.name));
     },
   });
 
@@ -238,64 +276,120 @@ export default function Sales() {
     },
   });
 
+  // ── Checkout — Dexie first, then Supabase sync ─────────────────────────────
   const checkoutMutation = useMutation({
     mutationFn: async (paymentMethod: "cash" | "card") => {
       if (isDiscounted && !customerIdNumber.trim())
         throw new Error(
           "Please enter the customer's PWD/Senior Citizen ID number",
         );
+
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user) throw new Error("User not authenticated");
+
       const cashTenderedValue =
         paymentMethod === "cash" ? parseFloat(cashTendered.toFixed(2)) : 0;
       const changeValue =
         paymentMethod === "cash"
           ? parseFloat((cashTendered - cartTotal).toFixed(2))
           : 0;
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      if (!user) throw new Error("User not authenticated");
 
-      const { data: transaction, error: txError } = await supabase
-        .from("transactions")
-        .insert({
-          employee_id: user.id,
-          total_amount: parseFloat(cartTotal.toFixed(2)),
-          payment_method: paymentMethod,
-          vat_amount: parseFloat(vatAmount.toFixed(2)),
-          discount_type: isDiscounted ? discountType : null,
-          discount_amount: parseFloat(discountAmount.toFixed(2)),
-          original_amount: parseFloat(cartSubtotal.toFixed(2)),
-          customer_id_number: isDiscounted ? customerIdNumber.trim() : null,
-          cash_tendered: cashTenderedValue,
-          change_amount: changeValue,
-        })
-        .select()
-        .single();
-      if (txError) throw txError;
-      const { error: itemsError } = await supabase
-        .from("transaction_items")
-        .insert(
-          cart.map((item) => ({
-            transaction_id: transaction.id,
-            product_id: item.product.id,
-            quantity: item.quantity,
-            unit_price: Number(item.product.price),
-            subtotal: Number(item.product.price) * item.quantity,
-          })),
-        );
-      if (itemsError) throw itemsError;
+      // Generate IDs locally so Dexie and Supabase share the same IDs
+      const txId = crypto.randomUUID();
+      const now = new Date().toISOString();
+
+      const txRecord = {
+        id: txId,
+        created_at: now,
+        employee_id: user.id,
+        total_amount: parseFloat(cartTotal.toFixed(2)),
+        payment_method: paymentMethod,
+        status: "completed",
+        vat_amount: parseFloat(vatAmount.toFixed(2)),
+        discount_type: isDiscounted ? discountType : null,
+        discount_amount: parseFloat(discountAmount.toFixed(2)),
+        original_amount: parseFloat(cartSubtotal.toFixed(2)),
+        customer_id_number: isDiscounted ? customerIdNumber.trim() : null,
+        cash_tendered: cashTenderedValue,
+        change_amount: changeValue,
+      };
+
+      const itemRecords = cart.map((item) => ({
+        id: crypto.randomUUID(),
+        transaction_id: txId,
+        product_id: item.product.id,
+        quantity: item.quantity,
+        unit_price: Number(item.product.price),
+        subtotal: Number(item.product.price) * item.quantity,
+        created_at: now,
+        product_name: item.product.name, // store name for offline receipt
+      }));
+
+      const dexieRecord = {
+        ...txRecord,
+        status: txRecord.status as "completed" | "refunded" | "voided",
+        _sync_status: "pending" as const,
+        _sync_error: null,
+      };
+      await db.transactions.add(dexieRecord);
+      await db.transaction_items.bulkAdd(
+        itemRecords.map((item) => ({
+          ...item,
+          _sync_status: "pending" as const,
+        })),
+      );
       for (const item of cart) {
-        const { error } = await supabase
-          .from("products")
-          .update({
-            stock_quantity: item.product.stock_quantity - item.quantity,
-          })
-          .eq("id", item.product.id);
-        if (error) throw error;
+        await db.products.update(item.product.id, {
+          stock_quantity: item.product.stock_quantity - item.quantity,
+        });
       }
+
+      // ── 2. Sync to Supabase ────────────────────────────────────────────────
+      try {
+        const {
+          _sync_status: _s,
+          _sync_error: _e,
+          ...supabasePayload
+        } = dexieRecord;
+        const { error: txError } = await supabase
+          .from("transactions")
+          .insert(supabasePayload);
+        if (txError) throw txError;
+
+        const { error: itemsError } = await supabase
+          .from("transaction_items")
+          .insert(itemRecords.map(({ product_name, ...rest }) => rest)); // strip local-only field
+        if (itemsError) throw itemsError;
+
+        for (const item of cart) {
+          const { error } = await supabase
+            .from("products")
+            .update({
+              stock_quantity: item.product.stock_quantity - item.quantity,
+            })
+            .eq("id", item.product.id);
+          if (error) throw error;
+        }
+      } catch (supabaseError) {
+        // ── 3. Roll back Dexie if Supabase fails ──────────────────────────────
+        await db.transactions.delete(txId);
+        await db.transaction_items
+          .where("transaction_id")
+          .equals(txId)
+          .delete();
+        for (const item of cart) {
+          await db.products.update(item.product.id, {
+            stock_quantity: item.product.stock_quantity, // restore original
+          });
+        }
+        throw supabaseError;
+      }
+
       return {
-        id: transaction.id,
-        created_at: transaction.created_at,
+        id: txId,
+        created_at: now,
         total: cartTotal,
         vat: vatAmount,
         net: netAmount,
@@ -321,6 +415,7 @@ export default function Sales() {
       setDiscountType("none");
       setCustomerIdNumber("");
       queryClient.invalidateQueries({ queryKey: ["sales-products"] });
+      queryClient.invalidateQueries({ queryKey: ["inventory-products"] });
       queryClient.invalidateQueries({ queryKey: ["dashboard"] });
       toast.success("Transaction completed!");
     },
@@ -340,10 +435,10 @@ export default function Sales() {
     const w = window.open("", "_blank");
     if (!w) return;
     w.document.write(`<html><head><title>Receipt</title>
-      <style>body{font-family:monospace;max-width:300px;margin:0 auto;padding:20px;font-size:12px}
-      h2{text-align:center;margin:0}p{margin:4px 0}.line{border-top:1px dashed #000;margin:8px 0}
-      .item{display:flex;justify-content:space-between}.total{font-weight:bold;font-size:14px}</style>
-      </head><body>${receiptRef.current.innerHTML}</body></html>`);
+        <style>body{font-family:monospace;max-width:300px;margin:0 auto;padding:20px;font-size:12px}
+        h2{text-align:center;margin:0}p{margin:4px 0}.line{border-top:1px dashed #000;margin:8px 0}
+        .item{display:flex;justify-content:space-between}.total{font-weight:bold;font-size:14px}</style>
+        </head><body>${receiptRef.current.innerHTML}</body></html>`);
     w.document.close();
     w.print();
   };
@@ -354,10 +449,10 @@ export default function Sales() {
     const blob = new Blob(
       [
         `<html><head><style>
-    body{font-family:monospace;max-width:300px;margin:0 auto;padding:20px;font-size:12px}
-    h2{text-align:center;margin:0}p{margin:4px 0}.line{border-top:1px dashed #000;margin:8px 0}
-    .item{display:flex;justify-content:space-between}.total{font-weight:bold;font-size:14px}
-  </style></head><body>${content}</body></html>`,
+      body{font-family:monospace;max-width:300px;margin:0 auto;padding:20px;font-size:12px}
+      h2{text-align:center;margin:0}p{margin:4px 0}.line{border-top:1px dashed #000;margin:8px 0}
+      .item{display:flex;justify-content:space-between}.total{font-weight:bold;font-size:14px}
+    </style></head><body>${content}</body></html>`,
       ],
       { type: "text/html" },
     );
@@ -374,67 +469,82 @@ export default function Sales() {
     <div
       className={`grid gap-2 ${compact ? "grid-cols-2" : "grid-cols-2 md:grid-cols-3"}`}
     >
-      {paginatedProducts.map((product) => {
-        const expiry = getExpiryStatus(product);
-        const isExpired = expiry === "expired";
-        const nearExpiryDisc = Number(product.discount_percentage) || 0;
-        const isFlashing = flashState?.id === product.id;
-        return (
-          <button
-            key={product.id}
-            onClick={() => !isExpired && addToCart(product)}
-            disabled={isExpired}
-            className={[
-              "rounded-lg border text-left transition-colors select-none",
-              compact ? "p-3" : "p-4",
-              isExpired
-                ? "opacity-50 cursor-not-allowed bg-muted"
-                : "bg-card hover:border-primary/50 hover:shadow-sm active:scale-95",
-              isFlashing && flashState?.type === "success"
-                ? "flash-success"
-                : "",
-              isFlashing && flashState?.type === "error" ? "flash-error" : "",
-            ].join(" ")}
-            style={{ transition: "transform 0.1s" }}
-          >
-            <div className="flex items-start justify-between gap-1">
-              <p
-                className={`font-medium truncate flex-1 ${compact ? "text-xs" : "text-sm"}`}
-              >
-                {product.name}
-              </p>
-              {getExpiryBadge(product)}
+      {isProductsLoading
+        ? // Skeleton cards
+          Array.from({ length: 6 }).map((_, i) => (
+            <div
+              key={i}
+              className={`rounded-lg border bg-muted animate-pulse ${compact ? "p-3" : "p-4"}`}
+            >
+              <div className="h-3 bg-muted-foreground/20 rounded w-3/4 mb-2" />
+              <div className="h-5 bg-muted-foreground/20 rounded w-1/2 mb-2" />
+              <div className="h-3 bg-muted-foreground/20 rounded w-1/3" />
             </div>
-            <div className="flex items-baseline gap-2 mt-1">
-              <p
-                className={`font-semibold text-success ${compact ? "text-sm" : "text-lg"}`}
+          ))
+        : paginatedProducts.map((product) => {
+            const expiry = getExpiryStatus(product);
+            const isExpired = expiry === "expired";
+            const nearExpiryDisc = Number(product.discount_percentage) || 0;
+            const isFlashing = flashState?.id === product.id;
+            return (
+              <button
+                key={product.id}
+                onClick={() => !isExpired && addToCart(product)}
+                disabled={isExpired}
+                className={[
+                  "rounded-lg border text-left transition-colors select-none",
+                  compact ? "p-3" : "p-4",
+                  isExpired
+                    ? "opacity-50 cursor-not-allowed bg-muted"
+                    : "bg-card hover:border-primary/50 hover:shadow-sm active:scale-95",
+                  isFlashing && flashState?.type === "success"
+                    ? "flash-success"
+                    : "",
+                  isFlashing && flashState?.type === "error"
+                    ? "flash-error"
+                    : "",
+                ].join(" ")}
+                style={{ transition: "transform 0.1s" }}
               >
-                ₱
-                {nearExpiryDisc > 0
-                  ? (
-                      Number(product.price) *
-                      (1 - nearExpiryDisc / 100)
-                    ).toFixed(2)
-                  : Number(product.price).toFixed(2)}
-              </p>
-              {nearExpiryDisc > 0 && (
-                <p className="text-xs text-muted-foreground line-through">
-                  ₱{Number(product.price).toFixed(2)}
+                <div className="flex items-start justify-between gap-1">
+                  <p
+                    className={`font-medium truncate flex-1 ${compact ? "text-xs" : "text-sm"}`}
+                  >
+                    {product.name}
+                  </p>
+                  {getExpiryBadge(product)}
+                </div>
+                <div className="flex items-baseline gap-2 mt-1">
+                  <p
+                    className={`font-semibold text-success ${compact ? "text-sm" : "text-lg"}`}
+                  >
+                    ₱
+                    {nearExpiryDisc > 0
+                      ? (
+                          Number(product.price) *
+                          (1 - nearExpiryDisc / 100)
+                        ).toFixed(2)
+                      : Number(product.price).toFixed(2)}
+                  </p>
+                  {nearExpiryDisc > 0 && (
+                    <p className="text-xs text-muted-foreground line-through">
+                      ₱{Number(product.price).toFixed(2)}
+                    </p>
+                  )}
+                </div>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {product.stock_quantity} in stock
+                  {nearExpiryDisc > 0 && (
+                    <span className="text-warning ml-1">
+                      • {nearExpiryDisc}% off
+                    </span>
+                  )}
                 </p>
-              )}
-            </div>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              {product.stock_quantity} in stock
-              {nearExpiryDisc > 0 && (
-                <span className="text-warning ml-1">
-                  • {nearExpiryDisc}% off
-                </span>
-              )}
-            </p>
-          </button>
-        );
-      })}
-      {paginatedProducts.length === 0 && (
+              </button>
+            );
+          })}
+
+      {!isProductsLoading && paginatedProducts.length === 0 && (
         <p
           className={`col-span-full text-center text-muted-foreground py-8 text-sm`}
         >
@@ -519,27 +629,27 @@ export default function Sales() {
   return (
     <>
       <style>{`
-        @keyframes flash-success {
-          0%   { box-shadow: 0 0 0 0 rgba(34,197,94,0.7); background-color: rgba(34,197,94,0.12); }
-          50%  { box-shadow: 0 0 0 6px rgba(34,197,94,0); background-color: rgba(34,197,94,0.22); }
-          100% { box-shadow: 0 0 0 0 rgba(34,197,94,0);   background-color: transparent; }
-        }
-        @keyframes flash-error {
-          0%   { box-shadow: 0 0 0 0 rgba(239,68,68,0.7); background-color: rgba(239,68,68,0.12); }
-          50%  { box-shadow: 0 0 0 6px rgba(239,68,68,0); background-color: rgba(239,68,68,0.22); }
-          100% { box-shadow: 0 0 0 0 rgba(239,68,68,0);   background-color: transparent; }
-        }
-        .flash-success { animation: flash-success 0.6s ease-out forwards; }
-        .flash-error   { animation: flash-error   0.6s ease-out forwards; }
-      `}</style>
+          @keyframes flash-success {
+            0%   { box-shadow: 0 0 0 0 rgba(34,197,94,0.7); background-color: rgba(34,197,94,0.12); }
+            50%  { box-shadow: 0 0 0 6px rgba(34,197,94,0); background-color: rgba(34,197,94,0.22); }
+            100% { box-shadow: 0 0 0 0 rgba(34,197,94,0);   background-color: transparent; }
+          }
+          @keyframes flash-error {
+            0%   { box-shadow: 0 0 0 0 rgba(239,68,68,0.7); background-color: rgba(239,68,68,0.12); }
+            50%  { box-shadow: 0 0 0 6px rgba(239,68,68,0); background-color: rgba(239,68,68,0.22); }
+            100% { box-shadow: 0 0 0 0 rgba(239,68,68,0);   background-color: transparent; }
+          }
+          .flash-success { animation: flash-success 0.6s ease-out forwards; }
+          .flash-error   { animation: flash-error   0.6s ease-out forwards; }
+        `}</style>
 
       <div className="space-y-4">
         <h1 className="text-2xl font-semibold tracking-tight">Sales</h1>
 
         {/* ══════════════════════════════════════════════════
-            MOBILE layout  (hidden on lg+)
-            Order: 1) Barcode  2) Cart block  3) Products
-            ══════════════════════════════════════════════════ */}
+              MOBILE layout  (hidden on lg+)
+              Order: 1) Barcode  2) Cart block  3) Products
+              ══════════════════════════════════════════════════ */}
         <div className="flex flex-col gap-4 lg:hidden">
           {/* 1 — Barcode scanner */}
           <BarcodeScanner onScan={handleBarcodeScan} />
@@ -615,10 +725,10 @@ export default function Sales() {
         </div>
 
         {/* ══════════════════════════════════════════════════
-            DESKTOP layout  (hidden below lg)
-            Left 3/5: barcode + search + products
-            Right 2/5: sticky cart, self-contained scroll
-            ══════════════════════════════════════════════════ */}
+              DESKTOP layout  (hidden below lg)
+              Left 3/5: barcode + search + products
+              Right 2/5: sticky cart, self-contained scroll
+              ══════════════════════════════════════════════════ */}
         <div className="hidden lg:grid lg:grid-cols-5 gap-6">
           {/* Left — barcode + products */}
           <div className="lg:col-span-3 space-y-4">

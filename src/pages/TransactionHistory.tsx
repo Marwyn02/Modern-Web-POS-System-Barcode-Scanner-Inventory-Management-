@@ -5,6 +5,7 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
+import { db } from "@/lib/db";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import {
@@ -59,7 +60,7 @@ import {
   ChevronLeft,
   ChevronRight,
 } from "lucide-react";
-import { format, startOfDay, endOfDay } from "date-fns";
+import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { useUserRole } from "@/hooks/useUserRole";
@@ -100,6 +101,7 @@ export default function TransactionHistory() {
     sortDir,
   ]);
 
+  // ── Employees (Supabase only — small table, no offline concern) ─────────────
   const { data: employees } = useQuery({
     queryKey: ["employees-list"],
     queryFn: async () => {
@@ -107,18 +109,17 @@ export default function TransactionHistory() {
         .from("employees")
         .select("user_id, name")
         .order("name");
-
       if (error) throw error;
       return data || [];
     },
   });
 
-  const employeeMap = useMemo(() => {
-    return Object.fromEntries(
-      (employees || []).map((e) => [e.user_id, e.name]),
-    );
-  }, [employees]);
+  const employeeMap = useMemo(
+    () => Object.fromEntries((employees || []).map((e) => [e.user_id, e.name])),
+    [employees],
+  );
 
+  // ── Transactions — Dexie first ──────────────────────────────────────────────
   const { data: transactions } = useQuery({
     queryKey: [
       "transaction-history",
@@ -130,30 +131,207 @@ export default function TransactionHistory() {
       dateTo?.toISOString(),
     ],
     queryFn: async () => {
-      let query = supabase
-        .from("transactions")
-        .select("*")
-        .order("created_at", { ascending: false })
-        .limit(200);
-      if (search) query = query.ilike("id", `%${search}%`);
-      if (paymentFilter !== "all")
-        query = query.eq("payment_method", paymentFilter as "cash" | "card");
-      if (statusFilter !== "all")
-        query = query.eq(
-          "status",
-          statusFilter as "completed" | "refunded" | "voided",
+      // 1. If online, seed Dexie from Supabase first
+      if (navigator.onLine) {
+        const { data: remote } = await supabase
+          .from("transactions")
+          .select("*")
+          .order("created_at", { ascending: false })
+          .limit(500);
+
+        if (remote?.length) {
+          await db.transactions.bulkPut(
+            remote.map((t) => ({
+              ...t,
+              employee_id: t.employee_id ?? "",
+              _sync_status: "synced" as const,
+              _sync_error: null,
+            })),
+          );
+        }
+      }
+
+      // 2. Always read from Dexie (has both remote + local pending)
+      let data: any[] = await db.transactions.toArray();
+
+      if (search)
+        data = data.filter((t) =>
+          t.id.toLowerCase().includes(search.toLowerCase()),
         );
+      if (paymentFilter !== "all")
+        data = data.filter((t) => t.payment_method === paymentFilter);
+      if (statusFilter !== "all")
+        data = data.filter((t) => t.status === statusFilter);
       if (employeeFilter !== "all")
-        query = query.eq("employee_id", employeeFilter);
+        data = data.filter((t) => t.employee_id === employeeFilter);
       if (dateFrom)
-        query = query.gte("created_at", startOfDay(dateFrom).toISOString());
-      if (dateTo)
-        query = query.lte("created_at", endOfDay(dateTo).toISOString());
-      const { data } = await query;
-      return data || [];
+        data = data.filter((t) => new Date(t.created_at) >= dateFrom);
+      if (dateTo) data = data.filter((t) => new Date(t.created_at) <= dateTo);
+
+      return data;
     },
   });
 
+  // ── Transaction items — Dexie first ────────────────────────────────────────
+  const activeItemsTxId = selectedTxId || receiptTxId;
+  const { data: txItems } = useQuery({
+    queryKey: ["tx-items", activeItemsTxId],
+    enabled: !!activeItemsTxId,
+    queryFn: async () => {
+      if (!activeItemsTxId) return [];
+
+      // Seed from Supabase if online
+      if (navigator.onLine) {
+        const { data: remoteItems } = await supabase
+          .from("transaction_items")
+          .select("*")
+          .eq("transaction_id", activeItemsTxId);
+
+        if (remoteItems?.length) {
+          await db.transaction_items.bulkPut(
+            remoteItems.map((i) => ({
+              ...i,
+              product_id: i.product_id ?? "",
+              product_name: "",
+              _sync_status: "synced" as const,
+              _sync_error: null,
+            })),
+          );
+        }
+      }
+
+      // Read from Dexie
+      const items: any[] = await db.transaction_items
+        .where("transaction_id")
+        .equals(activeItemsTxId)
+        .toArray();
+
+      // Enrich with product names from Supabase if names are missing
+      const missingNames = items.some((i) => !i.product_name);
+      if (missingNames && items.length > 0) {
+        const productIds = [
+          ...new Set(items.map((i) => i.product_id).filter(Boolean)),
+        ];
+        const { data: products } = await supabase
+          .from("products")
+          .select("id, name")
+          .in("id", productIds);
+        const productMap = Object.fromEntries(
+          (products || []).map((p) => [p.id, p.name]),
+        );
+        return items.map((i) => ({
+          ...i,
+          products: {
+            name: productMap[i.product_id] || i.product_name || "Unknown",
+          },
+        }));
+      }
+
+      return items.map((i) => ({
+        ...i,
+        products: { name: i.product_name || "Unknown" },
+      }));
+    },
+  });
+
+  const selectedTx = transactions?.find((t) => t.id === selectedTxId);
+  const receiptTx = transactions?.find((t) => t.id === receiptTxId);
+
+  // ── Refund — Dexie + Supabase sync ─────────────────────────────────────────
+  const refundMutation = useMutation({
+    mutationFn: async (txId: string) => {
+      // 1. Update Dexie immediately (offline-safe)
+      await db.transactions.update(txId, { status: "refunded" });
+
+      // 2. Sync to Supabase
+      const { error } = await supabase
+        .from("transactions")
+        .update({ status: "refunded" as const })
+        .eq("id", txId);
+      if (error) throw error;
+
+      // 3. Restore stock in Supabase
+      const { data: items } = await supabase
+        .from("transaction_items")
+        .select("product_id, quantity")
+        .eq("transaction_id", txId);
+
+      for (const item of items || []) {
+        if (!item.product_id) continue;
+        const { data: product } = await supabase
+          .from("products")
+          .select("stock_quantity")
+          .eq("id", item.product_id)
+          .single();
+        if (product) {
+          await supabase
+            .from("products")
+            .update({ stock_quantity: product.stock_quantity + item.quantity })
+            .eq("id", item.product_id);
+        }
+      }
+    },
+    onSuccess: () => {
+      toast.success("Transaction refunded — stock restored");
+      queryClient.invalidateQueries({ queryKey: ["transaction-history"] });
+      queryClient.invalidateQueries({ queryKey: ["inventory-products"] });
+      setRefundTxId(null);
+    },
+    onError: async (error: any, txId) => {
+      // Roll back Dexie on Supabase failure
+      await db.transactions.update(txId, { status: "completed" });
+      toast.error(error.message);
+    },
+  });
+
+  // ── Unrefund — Dexie + Supabase sync ───────────────────────────────────────
+  const unrefundMutation = useMutation({
+    mutationFn: async (txId: string) => {
+      // 1. Update Dexie immediately
+      await db.transactions.update(txId, { status: "completed" });
+
+      // 2. Sync to Supabase
+      const { error } = await supabase
+        .from("transactions")
+        .update({ status: "completed" as const })
+        .eq("id", txId);
+      if (error) throw error;
+
+      // 3. Deduct stock again in Supabase
+      const { data: items } = await supabase
+        .from("transaction_items")
+        .select("product_id, quantity")
+        .eq("transaction_id", txId);
+
+      for (const item of items || []) {
+        if (!item.product_id) continue;
+        const { data: product } = await supabase
+          .from("products")
+          .select("stock_quantity")
+          .eq("id", item.product_id)
+          .single();
+        if (product) {
+          await supabase
+            .from("products")
+            .update({ stock_quantity: product.stock_quantity - item.quantity })
+            .eq("id", item.product_id);
+        }
+      }
+    },
+    onSuccess: () => {
+      toast.success("Refund cancelled — transaction restored to completed");
+      queryClient.invalidateQueries({ queryKey: ["transaction-history"] });
+      queryClient.invalidateQueries({ queryKey: ["inventory-products"] });
+      setUnrefundTxId(null);
+    },
+    onError: async (error: any, txId) => {
+      // Roll back Dexie on Supabase failure
+      await db.transactions.update(txId, { status: "refunded" });
+      toast.error(error.message);
+    },
+  });
+
+  // ── Sorting ─────────────────────────────────────────────────────────────────
   const sortedTransactions = (transactions || []).sort((a, b) => {
     if (sortKey === "created_at") {
       const cmp =
@@ -177,101 +355,6 @@ export default function TransactionHistory() {
       setSortDir(key === "created_at" ? "desc" : "asc");
     }
   };
-
-  // Fetch items for detail/receipt view
-  const activeItemsTxId = selectedTxId || receiptTxId;
-  const { data: txItems } = useQuery({
-    queryKey: ["tx-items", activeItemsTxId],
-    enabled: !!activeItemsTxId,
-    queryFn: async () => {
-      const { data } = await supabase
-        .from("transaction_items")
-        .select("*, products(name)")
-        .eq("transaction_id", activeItemsTxId!);
-      return data || [];
-    },
-  });
-
-  const selectedTx = transactions?.find((t) => t.id === selectedTxId);
-  const receiptTx = transactions?.find((t) => t.id === receiptTxId);
-
-  // Refund mutation
-  const refundMutation = useMutation({
-    mutationFn: async (txId: string) => {
-      const { data: items } = await supabase
-        .from("transaction_items")
-        .select("product_id, quantity")
-        .eq("transaction_id", txId);
-      const { error } = await supabase
-        .from("transactions")
-        .update({ status: "refunded" as const })
-        .eq("id", txId);
-      if (error) throw error;
-      for (const item of items || []) {
-        if (item.product_id) {
-          const { data: product } = await supabase
-            .from("products")
-            .select("stock_quantity")
-            .eq("id", item.product_id)
-            .single();
-          if (product) {
-            await supabase
-              .from("products")
-              .update({
-                stock_quantity: product.stock_quantity + item.quantity,
-              })
-              .eq("id", item.product_id);
-          }
-        }
-      }
-    },
-    onSuccess: () => {
-      toast.success("Transaction refunded — stock restored");
-      queryClient.invalidateQueries({ queryKey: ["transaction-history"] });
-      queryClient.invalidateQueries({ queryKey: ["inventory-products"] });
-      setRefundTxId(null);
-    },
-    onError: (error: any) => toast.error(error.message),
-  });
-
-  // Unrefund mutation: set back to completed + deduct stock again
-  const unrefundMutation = useMutation({
-    mutationFn: async (txId: string) => {
-      const { data: items } = await supabase
-        .from("transaction_items")
-        .select("product_id, quantity")
-        .eq("transaction_id", txId);
-      const { error } = await supabase
-        .from("transactions")
-        .update({ status: "completed" as const })
-        .eq("id", txId);
-      if (error) throw error;
-      for (const item of items || []) {
-        if (item.product_id) {
-          const { data: product } = await supabase
-            .from("products")
-            .select("stock_quantity")
-            .eq("id", item.product_id)
-            .single();
-          if (product) {
-            await supabase
-              .from("products")
-              .update({
-                stock_quantity: product.stock_quantity - item.quantity,
-              })
-              .eq("id", item.product_id);
-          }
-        }
-      }
-    },
-    onSuccess: () => {
-      toast.success("Refund cancelled — transaction restored to completed");
-      queryClient.invalidateQueries({ queryKey: ["transaction-history"] });
-      queryClient.invalidateQueries({ queryKey: ["inventory-products"] });
-      setUnrefundTxId(null);
-    },
-    onError: (error: any) => toast.error(error.message),
-  });
 
   const handlePrintReceipt = () => {
     if (!receiptRef.current) return;
@@ -386,6 +469,7 @@ export default function TransactionHistory() {
       </div>
     );
   };
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -497,6 +581,7 @@ export default function TransactionHistory() {
         </Select>
       </div>
 
+      {/* Table */}
       <Card>
         <CardContent className="p-0">
           <Table>
@@ -931,7 +1016,7 @@ export default function TransactionHistory() {
                   Cashier:{" "}
                   {receiptTx.employee_id
                     ? employeeMap[receiptTx.employee_id]
-                    : "—"}{" "}
+                    : "—"}
                 </p>
                 <p className="text-center text-muted-foreground mt-2">
                   Thank you for shopping!
