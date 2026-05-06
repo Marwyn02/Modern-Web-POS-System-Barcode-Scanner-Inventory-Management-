@@ -235,6 +235,7 @@ export function AppSidebar() {
         // Cache it locally
         await db.shifts.put({
           ...data,
+          employee_name: null,
           _sync_status: "synced",
           _sync_error: null,
         });
@@ -482,6 +483,7 @@ export function AppSidebar() {
         cash_difference: null,
         notes: null,
         created_at: new Date().toISOString(),
+        employee_name: null,
         _sync_status: "pending" as const,
         _sync_error: null,
       };
@@ -491,7 +493,8 @@ export function AppSidebar() {
 
       // 2. Try remote immediately if online
       if (navigator.onLine) {
-        const { _sync_status, _sync_error, ...payload } = newShift;
+        const { _sync_status, _sync_error, employee_name, ...payload } =
+          newShift;
         const { error } = await supabase.from("shifts").insert(payload);
         if (error) {
           // Leave as pending — will retry on reconnect
@@ -748,12 +751,6 @@ export function AppSidebar() {
 
   const handleLogout = async () => {
     try {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      if (user) {
-        await supabase.from("session_access").delete().eq("user_id", user.id);
-      }
       await supabase.auth.signOut();
     } catch (err) {
       console.error("Logout error:", err);

@@ -236,6 +236,7 @@ export default function TransactionHistory() {
 
   const selectedTx = transactions?.find((t) => t.id === selectedTxId);
   const receiptTx = transactions?.find((t) => t.id === receiptTxId);
+  const receiptCashierName = employeeMap[receiptTx?.employee_id ?? ""] ?? "—";
 
   // ── Refund — Dexie + Supabase sync ─────────────────────────────────────────
   const refundMutation = useMutation({
@@ -665,7 +666,7 @@ export default function TransactionHistory() {
                         >
                           <Printer className="h-3 w-3" />
                         </Button>
-                        {isAdmin && tx.status === "completed" && (
+                        {tx.status === "completed" && (
                           <Button
                             size="icon"
                             variant="ghost"
@@ -676,7 +677,7 @@ export default function TransactionHistory() {
                             <RotateCcw className="h-3 w-3" />
                           </Button>
                         )}
-                        {isAdmin && tx.status === "refunded" && (
+                        {tx.status === "refunded" && (
                           <Button
                             size="icon"
                             variant="ghost"
@@ -1013,10 +1014,7 @@ export default function TransactionHistory() {
                   Paid via {receiptTx.payment_method}
                 </p>
                 <p className="text-center text-muted-foreground">
-                  Cashier:{" "}
-                  {receiptTx.employee_id
-                    ? employeeMap[receiptTx.employee_id]
-                    : "—"}
+                  Cashier: {receiptCashierName}
                 </p>
                 <p className="text-center text-muted-foreground mt-2">
                   Thank you for shopping!

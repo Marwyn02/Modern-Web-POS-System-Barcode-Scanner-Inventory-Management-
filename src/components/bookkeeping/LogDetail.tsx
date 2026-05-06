@@ -147,21 +147,12 @@ export default function LogDetail() {
     queryKey: ["log-detail", id, type],
     enabled: !!id && !!type,
     queryFn: async () => {
-      if (type === "daily") {
-        const { data } = await supabase
-          .from("daily_logs")
-          .select("*")
-          .eq("id", id!)
-          .single();
-        return data as DailyLog;
-      } else {
-        const { data } = await supabase
-          .from("monthly_logs")
-          .select("*")
-          .eq("id", id!)
-          .single();
-        return data as MonthlyLog;
-      }
+      const { data } = await supabase
+        .from("daily_logs")
+        .select("*")
+        .eq("id", id!)
+        .single();
+      return data as DailyLog;
     },
   });
 

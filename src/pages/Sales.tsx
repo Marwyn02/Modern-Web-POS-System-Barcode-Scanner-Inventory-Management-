@@ -34,6 +34,7 @@ import { type Tables } from "@/integrations/supabase/types";
 import { differenceInDays } from "date-fns";
 import BarcodeScanner from "@/components/BarcodeScanner";
 import CartBody from "@/components/sales/CartBody";
+import { resolveEmployee } from "@/lib/resolveEmployee";
 import { format } from "date-fns";
 
 type Product = Tables<"products">;
@@ -260,22 +261,6 @@ export default function Sales() {
   const discountAmount = isDiscounted ? cartSubtotal - discountedTotal : 0;
   const changeAmount = cashTendered - cartTotal;
 
-  const { data: currentEmployee } = useQuery({
-    queryKey: ["current-employee"],
-    queryFn: async () => {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      if (!user) return null;
-      const { data } = await supabase
-        .from("employees")
-        .select("name")
-        .eq("user_id", user.id)
-        .single();
-      return data;
-    },
-  });
-
   // ── Checkout — Dexie first, then Supabase sync ─────────────────────────────
   const checkoutMutation = useMutation({
     mutationFn: async (paymentMethod: "cash" | "card") => {
@@ -284,10 +269,7 @@ export default function Sales() {
           "Please enter the customer's PWD/Senior Citizen ID number",
         );
 
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      if (!user) throw new Error("User not authenticated");
+      const { userId, employeeName } = await resolveEmployee();
 
       const cashTenderedValue =
         paymentMethod === "cash" ? parseFloat(cashTendered.toFixed(2)) : 0;
@@ -302,8 +284,8 @@ export default function Sales() {
 
       const txRecord = {
         id: txId,
+        employee_id: userId,
         created_at: now,
-        employee_id: user.id,
         total_amount: parseFloat(cartTotal.toFixed(2)),
         payment_method: paymentMethod,
         status: "completed",
@@ -333,11 +315,12 @@ export default function Sales() {
         _sync_status: "pending" as const,
         _sync_error: null,
       };
-      await db.transactions.add(dexieRecord);
-      await db.transaction_items.bulkAdd(
+      await db.transactions.put(dexieRecord);
+      await db.transaction_items.bulkPut(
         itemRecords.map((item) => ({
           ...item,
           _sync_status: "pending" as const,
+          _sync_error: null,
         })),
       );
       for (const item of cart) {
@@ -346,45 +329,87 @@ export default function Sales() {
         });
       }
 
-      // ── 2. Sync to Supabase ────────────────────────────────────────────────
-      try {
-        const {
-          _sync_status: _s,
-          _sync_error: _e,
-          ...supabasePayload
-        } = dexieRecord;
-        const { error: txError } = await supabase
-          .from("transactions")
-          .insert(supabasePayload);
-        if (txError) throw txError;
+      if (navigator.onLine) {
+        try {
+          const {
+            _sync_status: _s,
+            _sync_error: _e,
+            ...supabasePayload
+          } = dexieRecord;
 
-        const { error: itemsError } = await supabase
-          .from("transaction_items")
-          .insert(itemRecords.map(({ product_name, ...rest }) => rest)); // strip local-only field
-        if (itemsError) throw itemsError;
+          // ── Insert transaction ──────────────────────────────────────────
+          const { error: txError } = await supabase
+            .from("transactions")
+            .upsert(supabasePayload, { onConflict: "id" });
 
-        for (const item of cart) {
-          const { error } = await supabase
-            .from("products")
-            .update({
-              stock_quantity: item.product.stock_quantity - item.quantity,
-            })
-            .eq("id", item.product.id);
-          if (error) throw error;
-        }
-      } catch (supabaseError) {
-        // ── 3. Roll back Dexie if Supabase fails ──────────────────────────────
-        await db.transactions.delete(txId);
-        await db.transaction_items
-          .where("transaction_id")
-          .equals(txId)
-          .delete();
-        for (const item of cart) {
-          await db.products.update(item.product.id, {
-            stock_quantity: item.product.stock_quantity, // restore original
+          if (txError) {
+            // ✅ Log the full error so you can see exactly what column is wrong
+            console.error("[Checkout] Transaction insert failed:", {
+              code: txError.code,
+              message: txError.message,
+              details: txError.details,
+              hint: txError.hint,
+              payload: supabasePayload, // ✅ see exactly what was sent
+            });
+            throw txError;
+          }
+
+          // ── Insert transaction items ────────────────────────────────────
+          const itemsPayload = itemRecords.map(
+            ({ product_name, _sync_status, _sync_error, ...rest }: any) => rest,
+          );
+          const { error: itemsError } = await supabase
+            .from("transaction_items")
+            .upsert(itemsPayload, { onConflict: "id" });
+
+          if (itemsError) {
+            console.error("[Checkout] Items insert failed:", {
+              code: itemsError.code,
+              message: itemsError.message,
+              details: itemsError.details,
+              hint: itemsError.hint,
+              payload: itemsPayload,
+            });
+            throw itemsError;
+          }
+
+          // ── Update product stock ────────────────────────────────────────
+          for (const item of cart) {
+            const newQty = item.product.stock_quantity - item.quantity;
+            const { error: stockError } = await supabase
+              .from("products")
+              .update({ stock_quantity: newQty })
+              .eq("id", item.product.id);
+
+            if (stockError) {
+              console.error("[Checkout] Stock update failed:", {
+                product_id: item.product.id,
+                message: stockError.message,
+              });
+              // Non-fatal — don't throw, stock will reconcile on next sync
+            }
+          }
+
+          // ── Mark synced ─────────────────────────────────────────────────
+          await db.transactions.update(txId, {
+            _sync_status: "synced",
+            _sync_error: null,
           });
+          await db.transaction_items
+            .where("transaction_id")
+            .equals(txId)
+            .modify({ _sync_status: "synced", _sync_error: null });
+        } catch (supabaseError: any) {
+          await db.transactions.update(txId, {
+            _sync_status: "error",
+            _sync_error: supabaseError?.message ?? String(supabaseError),
+          });
+          console.warn(
+            "[Checkout] Supabase sync failed, saved to Dexie for retry:",
+            supabaseError,
+          );
+          // ✅ Don't re-throw — Dexie has it, receipt should still show
         }
-        throw supabaseError;
       }
 
       return {
@@ -398,6 +423,7 @@ export default function Sales() {
         discountAmount,
         originalAmount: cartSubtotal,
         customerIdNumber: isDiscounted ? customerIdNumber.trim() : null,
+        cashierName: employeeName,
       };
     },
     onSuccess: (data) => {
@@ -406,7 +432,6 @@ export default function Sales() {
         items: [...cart],
         cashTendered: data.method === "cash" ? cashTendered : undefined,
         change: data.method === "cash" ? cashTendered - data.total : undefined,
-        cashierName: currentEmployee?.name,
       });
       setShowReceipt(true);
       setCart([]);

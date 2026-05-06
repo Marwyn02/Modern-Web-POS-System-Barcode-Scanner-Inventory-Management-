@@ -7,7 +7,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { type Session } from "@supabase/supabase-js";
 import { AppLayout } from "@/components/AppLayout";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
-import { useSessionAccess } from "@/hooks/useSessionAccess";
+import { syncPendingTransactions } from "@/db/syncPending";
 
 import Auth from "./pages/Auth";
 import Dashboard from "./pages/Dashboard";
@@ -51,6 +51,20 @@ function AppRoutes() {
     return () => subscription.unsubscribe();
   }, []);
 
+  useEffect(() => {
+    const handleOnline = () => {
+      console.log("[Sync] Back online — syncing pending transactions...");
+      syncPendingTransactions();
+    };
+
+    window.addEventListener("online", handleOnline);
+
+    // Also sync on mount in case there are pending ones from a previous session
+    if (navigator.onLine) syncPendingTransactions();
+
+    return () => window.removeEventListener("online", handleOnline);
+  }, []);
+
   if (loading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-background">
@@ -72,26 +86,6 @@ function AppRoutes() {
 
 // ── Separate component so useSessionAccess only runs when authenticated ───────
 function AuthenticatedApp() {
-  const { status } = useSessionAccess();
-
-  // Show spinner while determining access status
-  if (status === "loading") {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-background">
-        <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
-      </div>
-    );
-  }
-
-  // Revoked — sign out is handled in the hook, show nothing while redirecting
-  if (status === "revoked") {
-    return (
-      <Routes>
-        <Route path="*" element={<Auth />} />
-      </Routes>
-    );
-  }
-
   // Admin OR active cashier — render full app
   return (
     <AppLayout>

@@ -47,13 +47,6 @@ export type Database = {
             foreignKeyName: "cashbox_logs_employee_id_fkey";
             columns: ["employee_id"];
             isOneToOne: false;
-            referencedRelation: "active_cashier_sessions";
-            referencedColumns: ["employee_id"];
-          },
-          {
-            foreignKeyName: "cashbox_logs_employee_id_fkey";
-            columns: ["employee_id"];
-            isOneToOne: false;
             referencedRelation: "employees";
             referencedColumns: ["id"];
           },
@@ -194,6 +187,7 @@ export type Database = {
           email: string | null;
           hourly_rate: number | null;
           id: string;
+          is_activated: boolean | null;
           is_active: boolean | null;
           name: string;
           phone: string | null;
@@ -206,6 +200,7 @@ export type Database = {
           email?: string | null;
           hourly_rate?: number | null;
           id?: string;
+          is_activated?: boolean | null;
           is_active?: boolean | null;
           name: string;
           phone?: string | null;
@@ -218,6 +213,7 @@ export type Database = {
           email?: string | null;
           hourly_rate?: number | null;
           id?: string;
+          is_activated?: boolean | null;
           is_active?: boolean | null;
           name?: string;
           phone?: string | null;
@@ -270,63 +266,6 @@ export type Database = {
             referencedColumns: ["id"];
           },
         ];
-      };
-      monthly_logs: {
-        Row: {
-          card_sales: number;
-          cash_sales: number;
-          closed_by: string | null;
-          created_at: string;
-          discount_amount: number;
-          id: string;
-          log_month: number;
-          log_year: number;
-          net_profit: number;
-          notes: string | null;
-          refund_amount: number;
-          refund_count: number;
-          stock_loss: number;
-          total_sales: number;
-          transaction_count: number;
-          vat_amount: number;
-        };
-        Insert: {
-          card_sales?: number;
-          cash_sales?: number;
-          closed_by?: string | null;
-          created_at?: string;
-          discount_amount?: number;
-          id?: string;
-          log_month: number;
-          log_year: number;
-          net_profit?: number;
-          notes?: string | null;
-          refund_amount?: number;
-          refund_count?: number;
-          stock_loss?: number;
-          total_sales?: number;
-          transaction_count?: number;
-          vat_amount?: number;
-        };
-        Update: {
-          card_sales?: number;
-          cash_sales?: number;
-          closed_by?: string | null;
-          created_at?: string;
-          discount_amount?: number;
-          id?: string;
-          log_month?: number;
-          log_year?: number;
-          net_profit?: number;
-          notes?: string | null;
-          refund_amount?: number;
-          refund_count?: number;
-          stock_loss?: number;
-          total_sales?: number;
-          transaction_count?: number;
-          vat_amount?: number;
-        };
-        Relationships: [];
       };
       products: {
         Row: {
@@ -393,45 +332,6 @@ export type Database = {
           },
         ];
       };
-      session_access: {
-        Row: {
-          email: string;
-          full_name: string | null;
-          granted_at: string | null;
-          granted_by: string | null;
-          id: string;
-          is_active: boolean;
-          notes: string | null;
-          requested_at: string | null;
-          revoked_at: string | null;
-          user_id: string;
-        };
-        Insert: {
-          email: string;
-          full_name?: string | null;
-          granted_at?: string | null;
-          granted_by?: string | null;
-          id?: string;
-          is_active?: boolean;
-          notes?: string | null;
-          requested_at?: string | null;
-          revoked_at?: string | null;
-          user_id: string;
-        };
-        Update: {
-          email?: string;
-          full_name?: string | null;
-          granted_at?: string | null;
-          granted_by?: string | null;
-          id?: string;
-          is_active?: boolean;
-          notes?: string | null;
-          requested_at?: string | null;
-          revoked_at?: string | null;
-          user_id?: string;
-        };
-        Relationships: [];
-      };
       shifts: {
         Row: {
           cash_difference: number | null;
@@ -470,13 +370,6 @@ export type Database = {
           starting_cash?: number | null;
         };
         Relationships: [
-          {
-            foreignKeyName: "shifts_employee_id_fkey";
-            columns: ["employee_id"];
-            isOneToOne: false;
-            referencedRelation: "active_cashier_sessions";
-            referencedColumns: ["employee_id"];
-          },
           {
             foreignKeyName: "shifts_employee_id_fkey";
             columns: ["employee_id"];
@@ -599,22 +492,7 @@ export type Database = {
       };
     };
     Views: {
-      active_cashier_sessions: {
-        Row: {
-          email: string | null;
-          employee_id: string | null;
-          employee_name: string | null;
-          full_name: string | null;
-          granted_at: string | null;
-          id: string | null;
-          is_active: boolean | null;
-          requested_at: string | null;
-          revoked_at: string | null;
-          role: Database["public"]["Enums"]["app_role"] | null;
-          user_id: string | null;
-        };
-        Relationships: [];
-      };
+      [_ in never]: never;
     };
     Functions: {
       create_employee_on_access_grant: {

@@ -58,6 +58,46 @@ import { toast } from "sonner";
 import { format } from "date-fns";
 import { useUserRole } from "@/hooks/useUserRole";
 
+const PasswordInput = ({
+  id,
+  value,
+  onChange,
+  show,
+  onToggle,
+  placeholder,
+  error,
+}: {
+  id: string;
+  value: string;
+  onChange: (v: string) => void;
+  show: boolean;
+  onToggle: () => void;
+  placeholder: string;
+  error?: string;
+}) => (
+  <div className="space-y-1">
+    <div className="relative">
+      <Input
+        id={id}
+        type={show ? "text" : "password"}
+        placeholder={placeholder}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className={`pr-10 ${error ? "border-destructive" : ""}`}
+      />
+      <button
+        type="button"
+        onClick={onToggle}
+        tabIndex={-1}
+        className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+      >
+        {show ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+      </button>
+    </div>
+    {error && <p className="text-xs text-destructive">{error}</p>}
+  </div>
+);
+
 export default function Employees() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingEmployee, setEditingEmployee] = useState<any>(null);
@@ -158,6 +198,20 @@ export default function Employees() {
     return Object.keys(newErrors).length === 0;
   };
 
+  const approveMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const { error } = await supabase
+        .from("employees")
+        .update({ is_activated: true })
+        .eq("id", id);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      toast.success("Employee approved");
+      queryClient.invalidateQueries({ queryKey: ["employees"] });
+    },
+  });
+
   const saveMutation = useMutation({
     mutationFn: async () => {
       if (!validate()) throw new Error("Validation failed");
@@ -178,36 +232,33 @@ export default function Employees() {
           .eq("id", editingEmployee.id);
         if (error) throw error;
       } else {
-        // Create mode — signup via auth first, then insert to employees
-        const { data: authData, error: authError } =
-          await supabase.auth.admin.createUser({
+        const {
+          data: { session: adminSession },
+        } = await supabase.auth.getSession();
+        if (!adminSession) throw new Error("No active admin session");
+
+        const { data: signUpData, error: signUpError } =
+          await supabase.auth.signUp({
             email: form.email.trim(),
             password: form.password,
-            email_confirm: true,
+            options: {
+              data: {
+                // Store these in auth metadata so the trigger can use them
+                name: form.name.trim(),
+                phone: form.phone.trim() || null,
+                role: form.role,
+                hourly_rate: parseFloat(form.hourly_rate) || 0,
+              },
+            },
           });
+        if (signUpError) throw signUpError;
+        if (!signUpData.user) throw new Error("Failed to create auth user");
 
-        // Fallback: use signUp if admin.createUser is not available
-        let userId: string;
-        if (authError) {
-          // Try regular signUp as fallback
-          const { data: signUpData, error: signUpError } =
-            await supabase.auth.signUp({
-              email: form.email.trim(),
-              password: form.password,
-            });
-          if (signUpError) throw signUpError;
-          if (!signUpData.user) throw new Error("Failed to create auth user");
-          userId = signUpData.user.id;
-        } else {
-          if (!authData.user) throw new Error("Failed to create auth user");
-          userId = authData.user.id;
-        }
-
-        const { error: empError } = await supabase.from("employees").insert({
-          ...payload,
-          user_id: userId,
+        // Restore admin session immediately
+        await supabase.auth.setSession({
+          access_token: adminSession.access_token,
+          refresh_token: adminSession.refresh_token,
         });
-        if (empError) throw empError;
       }
     },
     onSuccess: () => {
@@ -248,46 +299,6 @@ export default function Employees() {
       <Badge className={colors[role] || ""}>{role.replace("_", " ")}</Badge>
     );
   };
-
-  const PasswordInput = ({
-    id,
-    value,
-    onChange,
-    show,
-    onToggle,
-    placeholder,
-    error,
-  }: {
-    id: string;
-    value: string;
-    onChange: (v: string) => void;
-    show: boolean;
-    onToggle: () => void;
-    placeholder: string;
-    error?: string;
-  }) => (
-    <div className="space-y-1">
-      <div className="relative">
-        <Input
-          id={id}
-          type={show ? "text" : "password"}
-          placeholder={placeholder}
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          className={`pr-10 ${error ? "border-destructive" : ""}`}
-        />
-        <button
-          type="button"
-          onClick={onToggle}
-          tabIndex={-1}
-          className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-        >
-          {show ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-        </button>
-      </div>
-      {error && <p className="text-xs text-destructive">{error}</p>}
-    </div>
-  );
 
   return (
     <div className="space-y-6">
@@ -561,6 +572,19 @@ export default function Employees() {
                                   <Trash2 className="h-3 w-3" />
                                 </Button>
                               </>
+                            )}
+                            {canManageEmployees && !emp.is_activated && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-8 text-xs border-success text-success hover:bg-success hover:text-success-foreground"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  approveMutation.mutate(emp.id);
+                                }}
+                              >
+                                Approve
+                              </Button>
                             )}
                           </div>
                         </TableCell>
