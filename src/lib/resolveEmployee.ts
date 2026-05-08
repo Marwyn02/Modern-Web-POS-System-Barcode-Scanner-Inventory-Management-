@@ -1,3 +1,5 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+/* eslint-disable @typescript-eslint/no-unused-vars */
 import { supabase } from "@/integrations/supabase/client";
 import { db } from "@/lib/db";
 
@@ -8,68 +10,76 @@ export interface ResolvedEmployee {
 }
 
 export async function resolveEmployee(): Promise<ResolvedEmployee> {
-  // ── ONLINE PATH — Supabase is source of truth ──────────────────────────
-  if (navigator.onLine) {
-    try {
-      const {
-        data: { user },
-        error: authError,
-      } = await supabase.auth.getUser();
+  // Get current auth user first — this is fast, uses local storage
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  const currentUserId = session?.user?.id;
 
-      if (!authError && user) {
-        const { data: employee } = await supabase
-          .from("employees")
-          .select("id, name")
-          .eq("user_id", user.id)
-          .single();
-
-        if (employee) {
-          const resolved: ResolvedEmployee = {
-            userId: user.id, // auth UUID
-            employeeId: employee.id, // employees PK
-            employeeName: employee.name,
-          };
-
-          // ✅ Persist last session — survives offline indefinitely
+  // Check Dexie cache — only use it if it matches current user
+  const cachedSession = await db.last_session.get("current");
+  if (cachedSession && cachedSession.user_id === currentUserId) {
+    // Refresh in background if online
+    if (navigator.onLine) {
+      (async () => {
+        try {
+          const {
+            data: { user },
+          } = await supabase.auth.getUser();
+          if (!user) return;
+          const { data: employee } = await supabase
+            .from("employees")
+            .select("id, name")
+            .eq("user_id", user.id)
+            .single();
+          if (!employee) return;
           await db.last_session.put({
             key: "current",
-            user_id: resolved.userId,
-            employee_id: resolved.employeeId,
-            name: resolved.employeeName,
+            user_id: user.id,
+            employee_id: employee.id,
+            name: employee.name,
             saved_at: new Date().toISOString(),
           });
-
-          // ✅ Keep employees table warm for other lookups
-          await db.employees.put({
-            id: employee.id,
-            user_id: user.id,
-            name: employee.name,
-            _sync_status: "synced",
-          });
-
-          return resolved;
+        } catch (e) {
+          /* silent */
         }
-      }
-    } catch (err) {
-      console.warn(
-        "[resolveEmployee] Supabase failed, falling back to Dexie:",
-        err,
-      );
+      })();
     }
-  }
 
-  // ── OFFLINE PATH — read from Dexie ─────────────────────────────────────
-
-  const session = await db.last_session.get("current");
-  if (session) {
     return {
-      userId: session.user_id,
-      employeeId: session.employee_id,
-      employeeName: session.name,
+      userId: cachedSession.user_id,
+      employeeId: cachedSession.employee_id,
+      employeeName: cachedSession.name,
     };
   }
 
-  throw new Error(
-    "No cached session found. Please log in while online at least once before going offline.",
-  );
+  // No cache or different user — fetch from Supabase
+  const {
+    data: { user },
+    error,
+  } = await supabase.auth.getUser();
+  if (error || !user) throw new Error("Not authenticated. Please log in.");
+
+  const { data: employee } = await supabase
+    .from("employees")
+    .select("id, name")
+    .eq("user_id", user.id)
+    .single();
+  if (!employee) throw new Error("Employee record not found.");
+
+  const resolved: ResolvedEmployee = {
+    userId: user.id,
+    employeeId: employee.id,
+    employeeName: employee.name,
+  };
+
+  await db.last_session.put({
+    key: "current",
+    user_id: resolved.userId,
+    employee_id: resolved.employeeId,
+    name: resolved.employeeName,
+    saved_at: new Date().toISOString(),
+  });
+
+  return resolved;
 }

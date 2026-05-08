@@ -263,6 +263,7 @@ export default function Sales() {
 
   // ── Checkout — Dexie first, then Supabase sync ─────────────────────────────
   const checkoutMutation = useMutation({
+    networkMode: "always",
     mutationFn: async (paymentMethod: "cash" | "card") => {
       if (isDiscounted && !customerIdNumber.trim())
         throw new Error(
@@ -270,6 +271,10 @@ export default function Sales() {
         );
 
       const { userId, employeeName } = await resolveEmployee();
+
+      // const userId = "ebe17942-6cd1-4aeb-83e8-481fa17124a3";
+      // const employeeName = "Marywn";
+      // console.log(userId, employeeName);
 
       const cashTenderedValue =
         paymentMethod === "cash" ? parseFloat(cashTendered.toFixed(2)) : 0;
@@ -315,7 +320,9 @@ export default function Sales() {
         _sync_status: "pending" as const,
         _sync_error: null,
       };
+      toast.info("Step 1: saving...");
       await db.transactions.put(dexieRecord);
+      toast.info("Step 2: items...");
       await db.transaction_items.bulkPut(
         itemRecords.map((item) => ({
           ...item,
@@ -323,94 +330,76 @@ export default function Sales() {
           _sync_error: null,
         })),
       );
+      toast.info("Step 3: stock...");
       for (const item of cart) {
         await db.products.update(item.product.id, {
           stock_quantity: item.product.stock_quantity - item.quantity,
         });
       }
 
-      if (navigator.onLine) {
-        try {
-          const {
-            _sync_status: _s,
-            _sync_error: _e,
-            ...supabasePayload
-          } = dexieRecord;
+      toast.info("Step 4: done, online=" + navigator.onLine);
+      console.log("[Checkout] 5. Online?", navigator.onLine);
 
-          // ── Insert transaction ──────────────────────────────────────────
-          const { error: txError } = await supabase
-            .from("transactions")
-            .upsert(supabasePayload, { onConflict: "id" });
+      // if (navigator.onLine) {
+      //   try {
+      //     await Promise.race([
+      //       // Full sync attempt
+      //       (async () => {
+      //         const {
+      //           _sync_status: _s,
+      //           _sync_error: _e,
+      //           ...supabasePayload
+      //         } = dexieRecord;
 
-          if (txError) {
-            // ✅ Log the full error so you can see exactly what column is wrong
-            console.error("[Checkout] Transaction insert failed:", {
-              code: txError.code,
-              message: txError.message,
-              details: txError.details,
-              hint: txError.hint,
-              payload: supabasePayload, // ✅ see exactly what was sent
-            });
-            throw txError;
-          }
+      //         const { error: txError } = await supabase
+      //           .from("transactions")
+      //           .upsert(supabasePayload, { onConflict: "id" });
+      //         if (txError) throw txError;
 
-          // ── Insert transaction items ────────────────────────────────────
-          const itemsPayload = itemRecords.map(
-            ({ product_name, _sync_status, _sync_error, ...rest }: any) => rest,
-          );
-          const { error: itemsError } = await supabase
-            .from("transaction_items")
-            .upsert(itemsPayload, { onConflict: "id" });
+      //         const itemsPayload = itemRecords.map(
+      //           ({ product_name, _sync_status, _sync_error, ...rest }: any) =>
+      //             rest,
+      //         );
+      //         const { error: itemsError } = await supabase
+      //           .from("transaction_items")
+      //           .upsert(itemsPayload, { onConflict: "id" });
+      //         if (itemsError) throw itemsError;
 
-          if (itemsError) {
-            console.error("[Checkout] Items insert failed:", {
-              code: itemsError.code,
-              message: itemsError.message,
-              details: itemsError.details,
-              hint: itemsError.hint,
-              payload: itemsPayload,
-            });
-            throw itemsError;
-          }
+      //         for (const item of cart) {
+      //           const newQty = item.product.stock_quantity - item.quantity;
+      //           await supabase
+      //             .from("products")
+      //             .update({ stock_quantity: newQty })
+      //             .eq("id", item.product.id);
+      //         }
 
-          // ── Update product stock ────────────────────────────────────────
-          for (const item of cart) {
-            const newQty = item.product.stock_quantity - item.quantity;
-            const { error: stockError } = await supabase
-              .from("products")
-              .update({ stock_quantity: newQty })
-              .eq("id", item.product.id);
+      //         await db.transactions.update(txId, {
+      //           _sync_status: "synced",
+      //           _sync_error: null,
+      //         });
+      //         await db.transaction_items
+      //           .where("transaction_id")
+      //           .equals(txId)
+      //           .modify({ _sync_status: "synced", _sync_error: null });
+      //       })(),
 
-            if (stockError) {
-              console.error("[Checkout] Stock update failed:", {
-                product_id: item.product.id,
-                message: stockError.message,
-              });
-              // Non-fatal — don't throw, stock will reconcile on next sync
-            }
-          }
-
-          // ── Mark synced ─────────────────────────────────────────────────
-          await db.transactions.update(txId, {
-            _sync_status: "synced",
-            _sync_error: null,
-          });
-          await db.transaction_items
-            .where("transaction_id")
-            .equals(txId)
-            .modify({ _sync_status: "synced", _sync_error: null });
-        } catch (supabaseError: any) {
-          await db.transactions.update(txId, {
-            _sync_status: "error",
-            _sync_error: supabaseError?.message ?? String(supabaseError),
-          });
-          console.warn(
-            "[Checkout] Supabase sync failed, saved to Dexie for retry:",
-            supabaseError,
-          );
-          // ✅ Don't re-throw — Dexie has it, receipt should still show
-        }
-      }
+      //       // 3 second timeout — if Supabase hangs, give up and show receipt
+      //       new Promise<void>((_, reject) =>
+      //         setTimeout(() => reject(new Error("Sync timeout")), 3000),
+      //       ),
+      //     ]);
+      //   } catch (supabaseError: any) {
+      //     await db.transactions.update(txId, {
+      //       _sync_status: "error",
+      //       _sync_error: supabaseError?.message ?? String(supabaseError),
+      //     });
+      //     console.warn(
+      //       "[Checkout] Supabase sync failed, will retry:",
+      //       supabaseError,
+      //     );
+      //     // Don't re-throw — Dexie has it, receipt should still show
+      //   }
+      // }
 
       return {
         id: txId,
